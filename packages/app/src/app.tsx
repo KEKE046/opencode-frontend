@@ -38,9 +38,12 @@ import { ModelsProvider } from "@/context/models"
 import { NotificationProvider } from "@/context/notification"
 import { PermissionProvider } from "@/context/permission"
 import { PromptProvider } from "@/context/prompt"
-import { ServerConnection, ServerProvider, serverName, useServer } from "@/context/server"
+import { ServerConnection, ServerProvider, normalizeServerUrl, serverName, useServer } from "@/context/server"
 import { SettingsProvider } from "@/context/settings"
 import { TerminalProvider } from "@/context/terminal"
+import { ServerForm } from "@/components/dialog-select-server"
+import { Button } from "@opencode-ai/ui/button"
+import { createStore } from "solid-js/store"
 import DirectoryLayout from "@/pages/directory-layout"
 import Layout from "@/pages/layout"
 import { ErrorPage } from "./pages/error"
@@ -169,23 +172,25 @@ function ConnectionGate(props: ParentProps<{ disableHealthCheck?: boolean }>) {
 
   // performs repeated health check with a grace period for
   // non-http connections, otherwise fails instantly
-  const [startupHealthCheck, healthCheckActions] = createResource(() =>
-    props.disableHealthCheck
-      ? true
-      : Effect.gen(function* () {
-          if (!server.current) return true
-          const { http, type } = server.current
+  const [startupHealthCheck, healthCheckActions] = createResource(
+    () => (server.loaded() ? true : undefined),
+    () =>
+      props.disableHealthCheck
+        ? true
+        : Effect.gen(function* () {
+            if (!server.current) return true
+            const { http, type } = server.current
 
-          while (true) {
-            const res = yield* Effect.promise(() => checkServerHealth(http))
-            if (res.healthy) return true
-            if (checkMode() === "background" || type === "http") return false
-          }
-        }).pipe(
-          Effect.timeoutOrElse({ duration: "10 seconds", orElse: () => Effect.succeed(false) }),
-          Effect.ensuring(Effect.sync(() => setCheckMode("background"))),
-          Effect.runPromise,
-        ),
+            while (true) {
+              const res = yield* Effect.promise(() => checkServerHealth(http))
+              if (res.healthy) return true
+              if (checkMode() === "background" || type === "http") return false
+            }
+          }).pipe(
+            Effect.timeoutOrElse({ duration: "10 seconds", orElse: () => Effect.succeed(false) }),
+            Effect.ensuring(Effect.sync(() => setCheckMode("background"))),
+            Effect.runPromise,
+          ),
   )
 
   return (
@@ -268,8 +273,106 @@ function ConnectionError(props: { onRetry?: () => void; onServerSelected?: (key:
 function ServerKey(props: ParentProps) {
   const server = useServer()
   return (
-    <Show when={server.key} keyed>
+    <Show when={server.current && server.key} keyed>
       {props.children}
+    </Show>
+  )
+}
+
+function NoServer() {
+  const server = useServer()
+  const language = useLanguage()
+  const checkServerHealth = useCheckServerHealth()
+  const [form, setForm] = createStore({
+    url: "",
+    name: "",
+    username: "opencode",
+    password: "",
+    error: "",
+    busy: false,
+    status: undefined as boolean | undefined,
+  })
+
+  async function submit() {
+    const normalized = normalizeServerUrl(form.url)
+    if (!normalized) return
+    setForm("busy", true)
+    setForm("error", "")
+
+    const conn: ServerConnection.Http = {
+      type: "http",
+      http: { url: normalized },
+    }
+    if (form.name.trim()) conn.displayName = form.name.trim()
+    if (form.password) conn.http.password = form.password
+    if (form.password && form.username) conn.http.username = form.username
+
+    const result = await checkServerHealth(conn.http)
+    if (!result.healthy) {
+      setForm({ error: language.t("dialog.server.add.error"), busy: false })
+      return
+    }
+
+    server.add(conn)
+    setForm("busy", false)
+  }
+
+  return (
+    <div class="h-dvh w-screen flex flex-col items-center justify-center bg-background-base gap-6 p-6">
+      <div class="flex flex-col items-center max-w-md text-center">
+        <Splash class="w-12 h-15 mb-4" />
+        <p class="text-14-medium text-text-strong">{language.t("app.server.noServer.title")}</p>
+        <p class="mt-1 text-12-regular text-text-weak">{language.t("app.server.noServer.description")}</p>
+      </div>
+      <div class="w-full max-w-md">
+        <ServerForm
+          value={form.url}
+          name={form.name}
+          username={form.username}
+          password={form.password}
+          placeholder={language.t("dialog.server.add.placeholder")}
+          busy={form.busy}
+          error={form.error}
+          status={form.status}
+          onChange={(v) => setForm("url", v)}
+          onNameChange={(v) => setForm("name", v)}
+          onUsernameChange={(v) => setForm("username", v)}
+          onPasswordChange={(v) => setForm("password", v)}
+          onSubmit={submit}
+          onBack={() => {}}
+        />
+        <div class="px-5 mt-3">
+          <Button
+            variant="primary"
+            size="large"
+            onClick={submit}
+            disabled={form.busy || !form.url.trim()}
+            class="px-3 py-1.5"
+          >
+            {form.busy ? language.t("dialog.server.add.checking") : language.t("app.server.noServer.connect")}
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ServerGate(props: ParentProps<{ disableHealthCheck?: boolean }>) {
+  const server = useServer()
+  return (
+    <Show
+      when={server.loaded()}
+      fallback={
+        <div class="h-dvh w-screen flex flex-col items-center justify-center bg-background-base">
+          <Splash class="w-16 h-20 opacity-50 animate-pulse" />
+        </div>
+      }
+    >
+      <Show when={server.list.length > 0} fallback={<NoServer />}>
+        <ConnectionGate disableHealthCheck={props.disableHealthCheck}>
+          {props.children}
+        </ConnectionGate>
+      </Show>
     </Show>
   )
 }
@@ -278,6 +381,7 @@ export function AppInterface(props: {
   children?: JSX.Element
   defaultServer: ServerConnection.Key
   servers?: Array<ServerConnection.Any>
+  seed?: string
   router?: Component<BaseRouterProps>
   disableHealthCheck?: boolean
 }) {
@@ -286,8 +390,9 @@ export function AppInterface(props: {
       defaultServer={props.defaultServer}
       disableHealthCheck={props.disableHealthCheck}
       servers={props.servers}
+      seed={props.seed}
     >
-      <ConnectionGate disableHealthCheck={props.disableHealthCheck}>
+      <ServerGate disableHealthCheck={props.disableHealthCheck}>
         <ServerKey>
           <GlobalSDKProvider>
             <GlobalSyncProvider>
@@ -304,7 +409,7 @@ export function AppInterface(props: {
             </GlobalSyncProvider>
           </GlobalSDKProvider>
         </ServerKey>
-      </ConnectionGate>
+      </ServerGate>
     </ServerProvider>
   )
 }

@@ -106,7 +106,7 @@ function useServerPreview() {
   return { previewStatus }
 }
 
-function ServerForm(props: ServerFormProps) {
+export function ServerForm(props: ServerFormProps) {
   const language = useLanguage()
   const keyDown = (event: KeyboardEvent) => {
     event.stopPropagation()
@@ -497,6 +497,7 @@ export function DialogSelectServer() {
 
   async function handleRemove(url: ServerConnection.Key) {
     server.remove(url)
+    if (server.list.length === 0) dialog.close()
     if ((await platform.getDefaultServer?.()) === url) {
       platform.setDefaultServer?.(null)
     }
@@ -563,7 +564,7 @@ export function DialogSelectServer() {
                     showCredentials
                   />
                   <div class="flex items-center justify-center gap-4 pl-4">
-                    <Show when={ServerConnection.key(current()) === key}>
+                    <Show when={current() && ServerConnection.key(current()!) === key}>
                       <Icon name="check" class="h-6" />
                     </Show>
 

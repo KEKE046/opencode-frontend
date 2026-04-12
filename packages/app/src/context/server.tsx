@@ -92,12 +92,15 @@ export namespace ServerConnection {
   export const Key = { make: (v: string) => v as Key }
 }
 
+const SEED_KEY = "opencode.server.seeded"
+
 export const { use: useServer, provider: ServerProvider } = createSimpleContext({
   name: "Server",
   init: (props: {
     defaultServer: ServerConnection.Key
     disableHealthCheck?: boolean
     servers?: Array<ServerConnection.Any>
+    seed?: string
   }) => {
     const checkServerHealth = useCheckServerHealth()
 
@@ -109,6 +112,21 @@ export const { use: useServer, provider: ServerProvider } = createSimpleContext(
         lastProject: {} as Record<string, string>,
       }),
     )
+
+    // Seed initial server into store.list on first run so it's user-removable.
+    // Uses a separate localStorage flag to distinguish "never seeded" from "user emptied the list".
+    createEffect(() => {
+      if (!ready()) return
+      try {
+        if (localStorage.getItem(SEED_KEY) === "1") return
+        if (props.seed) {
+          const normalized = normalizeServerUrl(props.seed)
+          if (normalized && !store.list.some((x) => url(x) === normalized))
+            setStore("list", store.list.length, { type: "http" as const, http: { url: normalized } })
+        }
+        localStorage.setItem(SEED_KEY, "1")
+      } catch {}
+    })
 
     const url = (x: StoredServer) => (typeof x === "string" ? x : "type" in x ? x.http.url : x.url)
 
@@ -198,6 +216,7 @@ export const { use: useServer, provider: ServerProvider } = createSimpleContext(
       })
     }
 
+    const loaded = createMemo(() => ready())
     const isReady = createMemo(() => ready() && !!state.active)
 
     const check = (conn: ServerConnection.Any) => checkServerHealth(conn.http).then((x) => x.healthy)
@@ -225,6 +244,7 @@ export const { use: useServer, provider: ServerProvider } = createSimpleContext(
     })
 
     return {
+      loaded,
       ready: isReady,
       healthy,
       isLocal,

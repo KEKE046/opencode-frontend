@@ -314,6 +314,9 @@ export const dict = {
   "app.server.unreachable": "Could not reach {{server}}",
   "app.server.retrying": "Retrying automatically...",
   "app.server.otherServers": "Other servers",
+  "app.server.noServer.title": "No server configured",
+  "app.server.noServer.description": "Add a server to get started",
+  "app.server.noServer.connect": "Connect",
 
   "dialog.server.title": "Servers",
   "dialog.server.description": "Switch which OpenCode server this app connects to.",

@@ -22,11 +22,16 @@
 
 ## 改进方案
 
-> 本期仅实现方案三（右上角 Server 管理按钮）。方案一（NoServer 欢迎页）和方案二（ConnectionError 改进）后续迭代。
+> 方案一（NoServer 欢迎页）、方案三（右上角 Server 管理按钮）已实现。方案二（ConnectionError 改进）后续迭代。
 
-### 一、首次启动：无 Server 欢迎页（后续迭代）
+### 一、首次启动：无 Server 欢迎页（已实现）
 
-暂不实现。保持当前 localhost:4096 默认连接行为。
+- `entry.tsx` 不再硬编码 `servers={[server]}` 和 `disableHealthCheck`，改为传 `seed={getCurrentUrl()}`
+- `server.tsx` 新增 seed 机制：首次启动时将 seed URL 写入 `store.list`（可被用户删除），用独立 localStorage flag `opencode.server.seeded` 区分"从未 seed"和"用户清空了列表"
+- `server.tsx` 新增 `loaded` accessor（仅检查 store 是否从 localStorage 加载完毕，不依赖 active server）
+- `app.tsx` 新增 `ServerGate` 组件：在 `ServerProvider` 和 `ConnectionGate` 之间拦截，当 server 列表为空时显示 `NoServer` 欢迎页
+- `NoServer` 欢迎页：Logo + 提示文字 + URL 输入框 + 连接按钮，调用 `server.add()` 添加服务器
+- i18n 新增 `app.server.noServer.title`、`app.server.noServer.description`、`app.server.noServer.connect`
 
 ### 二、已有 Server 但连接失败（后续迭代）
 
