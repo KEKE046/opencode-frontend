@@ -12,6 +12,7 @@ import { usePlatform } from "@/context/platform"
 import { useCommand } from "@/context/command"
 import { useLanguage } from "@/context/language"
 import { applyPath, backPath, forwardPath } from "./titlebar-history"
+import { ServerStatusPopover } from "./server-status-popover"
 
 type TauriDesktopWindow = {
   startDragging?: () => Promise<void>
@@ -301,6 +302,11 @@ export function Titlebar() {
         data-tauri-drag-region
         onMouseDown={drag}
       >
+        <Show when={!params.dir}>
+          <Tooltip placement="bottom" value={language.t("status.popover.trigger")}>
+            <ServerStatusPopover />
+          </Tooltip>
+        </Show>
         <div id="opencode-titlebar-right" class="flex items-center gap-1 shrink-0 justify-end" />
         <Show when={windows()}>
           {!tauriApi() && <div class="w-36 shrink-0" />}
