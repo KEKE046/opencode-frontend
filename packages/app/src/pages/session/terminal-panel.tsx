@@ -1,6 +1,7 @@
 import { For, Show, createEffect, createMemo, on, onCleanup, onMount } from "solid-js"
 import { createStore } from "solid-js/store"
 import { makeEventListener } from "@solid-primitives/event-listener"
+import { createMediaQuery } from "@solid-primitives/media"
 import { Tabs } from "@opencode-ai/ui/tabs"
 import { ResizeHandle } from "@opencode-ai/ui/resize-handle"
 import { IconButton } from "@opencode-ai/ui/icon-button"
@@ -33,6 +34,7 @@ export function TerminalPanel() {
   const size = createSizing()
   const height = createMemo(() => layout.terminal.height())
   const close = () => view().terminal.close()
+  const isDesktop = createMediaQuery("(min-width: 768px)")
   let root: HTMLDivElement | undefined
 
   const [store, setStore] = createStore({
@@ -181,6 +183,18 @@ export function TerminalPanel() {
   }
 
   return (
+    <>
+    {/* Mobile backdrop */}
+    <Show when={!isDesktop()}>
+      <div
+        classList={{
+          "fixed inset-x-0 top-10 bottom-0 z-40 transition-opacity duration-200": true,
+          "opacity-100 pointer-events-auto": opened(),
+          "opacity-0 pointer-events-none": !opened(),
+        }}
+        onClick={close}
+      />
+    </Show>
     <div
       ref={root}
       id="terminal-panel"
@@ -188,20 +202,28 @@ export function TerminalPanel() {
       aria-label={language.t("terminal.title")}
       aria-hidden={!opened()}
       inert={!opened()}
-      class="relative w-full shrink-0 overflow-hidden bg-background-stronger"
+      class="overflow-hidden bg-background-stronger"
       classList={{
-        "border-t border-border-weak-base": opened(),
+        // Desktop: bottom panel
+        "relative w-full shrink-0": isDesktop(),
+        "border-t border-border-weak-base": isDesktop() && opened(),
         "transition-[height] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[height] motion-reduce:transition-none":
-          !size.active(),
+          isDesktop() && !size.active(),
+        // Mobile: full-screen overlay
+        "fixed inset-x-0 top-10 bottom-0 z-50 transition-transform duration-200 ease-out": !isDesktop(),
+        "translate-y-0": !isDesktop() && opened(),
+        "translate-y-full": !isDesktop() && !opened(),
       }}
-      style={{ height: opened() ? `${pane()}px` : "0px" }}
+      style={isDesktop() ? { height: opened() ? `${pane()}px` : "0px" } : undefined}
     >
       <div
-        class="absolute inset-x-0 top-0 flex flex-col"
+        class="flex flex-col"
         classList={{
+          "absolute inset-x-0 top-0": isDesktop(),
+          "h-full": !isDesktop(),
           "pointer-events-none": !opened(),
         }}
-        style={{ height: `${pane()}px` }}
+        style={isDesktop() ? { height: `${pane()}px` } : undefined}
       >
         <div class="hidden md:block" onPointerDown={() => size.start()}>
           <ResizeHandle
@@ -319,5 +341,6 @@ export function TerminalPanel() {
         </Show>
       </div>
     </div>
+    </>
   )
 }
