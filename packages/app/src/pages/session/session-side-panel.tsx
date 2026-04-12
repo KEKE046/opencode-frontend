@@ -11,6 +11,10 @@ import type { DragEvent } from "@thisbeyond/solid-dnd"
 import type { SnapshotFileDiff, VcsFileDiff } from "@opencode-ai/sdk/v2"
 import { ConstrainDragYAxis, getDraggableId } from "@/utils/solid-dnd"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
+import { useFileComponent } from "@opencode-ai/ui/context/file"
+import { Dynamic } from "solid-js/web"
+import { sampledChecksum } from "@opencode-ai/util/encode"
+import { getFilename } from "@opencode-ai/util/path"
 
 import FileTree from "@/components/file-tree"
 import { SessionContextUsage } from "@/components/session-context-usage"
@@ -146,6 +150,34 @@ export function SessionSidePanel(props: {
     activeDraggable: undefined as string | undefined,
   })
 
+  // Mobile file drawer state
+  const [mobile, setMobile] = createStore({
+    preview: undefined as string | undefined,
+  })
+  const viewer = useFileComponent()
+
+  createEffect(() => {
+    if (!layout.fileTree.opened()) setMobile("preview", undefined)
+  })
+
+  createEffect(() => {
+    const p = mobile.preview
+    if (p) file.load(p)
+  })
+
+  const viewed = createMemo(() => {
+    const p = mobile.preview
+    if (!p) return
+    return file.get(p)
+  })
+  const contents = createMemo(() => viewed()?.content?.content ?? "")
+  const cache = createMemo(() => sampledChecksum(contents()))
+
+  const dismiss = () => {
+    setMobile("preview", undefined)
+    layout.fileTree.close()
+  }
+
   const handleDragStart = (event: unknown) => {
     const id = getDraggableId(event)
     if (!id) return
@@ -188,6 +220,7 @@ export function SessionSidePanel(props: {
   })
 
   return (
+    <>
     <Show when={isDesktop()}>
       <aside
         id="review-panel"
@@ -436,5 +469,141 @@ export function SessionSidePanel(props: {
         </div>
       </aside>
     </Show>
+
+    {/* Mobile file drawer */}
+    <Show when={!isDesktop()}>
+      <div
+        classList={{
+          "fixed inset-x-0 top-10 bottom-0 z-40 transition-opacity duration-200": true,
+          "opacity-100 pointer-events-auto": layout.fileTree.opened(),
+          "opacity-0 pointer-events-none": !layout.fileTree.opened(),
+        }}
+        onClick={() => dismiss()}
+      />
+      <div
+        data-component="mobile-file-drawer"
+        classList={{
+          "fixed top-10 bottom-0 right-0 z-50 w-full bg-background-base flex flex-col border-l border-border-weaker-base transition-transform duration-200 ease-out": true,
+          "translate-x-0": layout.fileTree.opened(),
+          "translate-x-full": !layout.fileTree.opened(),
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div class="flex items-center h-10 px-3 shrink-0 border-b border-border-weaker-base">
+          <Show
+            when={mobile.preview}
+            fallback={
+              <>
+                <span class="flex-1 text-14-medium text-text-base truncate">
+                  {language.t("command.fileTree.toggle")}
+                </span>
+                <IconButton icon="close-small" variant="ghost" onClick={dismiss} />
+              </>
+            }
+          >
+            {(p) => (
+              <>
+                <IconButton icon="arrow-left" variant="ghost" onClick={() => setMobile("preview", undefined)} />
+                <span class="flex-1 text-13-regular text-text-base truncate ml-1">{getFilename(p())}</span>
+                <IconButton icon="close-small" variant="ghost" onClick={dismiss} />
+              </>
+            )}
+          </Show>
+        </div>
+
+        <div class="flex-1 min-h-0 overflow-auto">
+          <Show
+            when={mobile.preview}
+            fallback={
+              <Tabs
+                variant="pill"
+                value={fileTreeTab()}
+                onChange={setFileTreeTabValue}
+                class="h-full"
+                data-scope="mobile-filetree"
+              >
+                <Tabs.List>
+                  <Tabs.Trigger value="changes" class="flex-1" classes={{ button: "w-full" }}>
+                    {props.reviewCount()}{" "}
+                    {language.t(
+                      props.reviewCount() === 1 ? "session.review.change.one" : "session.review.change.other",
+                    )}
+                  </Tabs.Trigger>
+                  <Tabs.Trigger value="all" class="flex-1" classes={{ button: "w-full" }}>
+                    {language.t("session.files.all")}
+                  </Tabs.Trigger>
+                </Tabs.List>
+                <Tabs.Content value="changes" class="px-3 py-0">
+                  <Switch>
+                    <Match when={props.hasReview() || !props.diffsReady()}>
+                      <Show
+                        when={props.diffsReady()}
+                        fallback={
+                          <div class="px-2 py-2 text-12-regular text-text-weak">
+                            {language.t("common.loading")}
+                            {language.t("common.loading.ellipsis")}
+                          </div>
+                        }
+                      >
+                        <FileTree
+                          path=""
+                          class="pt-3"
+                          allowed={diffFiles()}
+                          kinds={kinds()}
+                          draggable={false}
+                          onFileClick={(node) => setMobile("preview", node.path)}
+                        />
+                      </Show>
+                    </Match>
+                    <Match when={true}>{empty(props.empty())}</Match>
+                  </Switch>
+                </Tabs.Content>
+                <Tabs.Content value="all" class="px-3 py-0">
+                  <Switch>
+                    <Match when={nofiles()}>{empty(language.t("session.files.empty"))}</Match>
+                    <Match when={true}>
+                      <FileTree
+                        path=""
+                        class="pt-3"
+                        modified={diffFiles()}
+                        kinds={kinds()}
+                        onFileClick={(node) => setMobile("preview", node.path)}
+                      />
+                    </Match>
+                  </Switch>
+                </Tabs.Content>
+              </Tabs>
+            }
+          >
+            <Switch>
+              <Match when={viewed()?.loaded}>
+                <div class="overflow-hidden pb-20">
+                  <Dynamic
+                    component={viewer}
+                    mode="text"
+                    file={{
+                      name: mobile.preview ?? "",
+                      contents: contents(),
+                      cacheKey: cache(),
+                    }}
+                    class="select-text"
+                  />
+                </div>
+              </Match>
+              <Match when={viewed()?.loading}>
+                <div class="px-4 py-4 text-12-regular text-text-weak">
+                  {language.t("common.loading")}
+                  {language.t("common.loading.ellipsis")}
+                </div>
+              </Match>
+              <Match when={viewed()?.error}>
+                <div class="px-4 py-4 text-12-regular text-text-weak">{String(viewed()?.error)}</div>
+              </Match>
+            </Switch>
+          </Show>
+        </div>
+      </div>
+    </Show>
+    </>
   )
 }
