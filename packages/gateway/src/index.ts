@@ -247,10 +247,12 @@ const app = new Hono()
     const targetPath = c.req.path.replace(`/s/${key}`, "")
     const targetUrl = server.url + targetPath + url.search
     
-    // Forward headers, strip hop-by-hop + accept-encoding (let Bun handle decompression)
+    const isSse = targetPath.endsWith("/event") || targetPath.endsWith("/sync-event")
+    const hopByHop = new Set(["host", "connection", "keep-alive", "transfer-encoding"])
+    if (isSse) hopByHop.add("accept-encoding")
     const headers = new Headers()
     for (const [name, value] of Object.entries(c.req.header())) {
-      if (["host", "connection", "keep-alive", "transfer-encoding", "accept-encoding"].includes(name.toLowerCase())) continue
+      if (hopByHop.has(name.toLowerCase())) continue
       headers.set(name, value)
     }
     const auth = authHeader(server)
@@ -285,10 +287,9 @@ const app = new Hono()
     const file = assets[key]
     if (file) {
       const mime = getMimeType(file) ?? "application/octet-stream"
-      const hashed = /-[A-Za-z0-9]{8,}\.\w+$/.test(key)
       if (!mime.startsWith("text/html")) {
         c.header("Content-Type", mime)
-        if (hashed) c.header("Cache-Control", "public, max-age=31536000, immutable")
+        c.header("Cache-Control", "public, max-age=31536000, immutable")
         return c.body(new Uint8Array(await fs.readFile(file)))
       }
       const page = await html(file)
