@@ -2,7 +2,7 @@ import { Component, Match, Show, Switch, createSignal } from "solid-js"
 import { createMediaQuery } from "@solid-primitives/media"
 import { Dialog } from "@opencode-ai/ui/dialog"
 import { Tabs } from "@opencode-ai/ui/tabs"
-import { Icon } from "@opencode-ai/ui/icon"
+import { Icon, type IconProps } from "@opencode-ai/ui/icon"
 import { IconButton } from "@opencode-ai/ui/icon-button"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useLanguage } from "@/context/language"
@@ -28,7 +28,7 @@ export const DialogSettings: Component = () => {
     return ""
   }
 
-  const item = (id: string, icon: string, label: string) => (
+  const item = (id: string, icon: IconProps["name"], label: string) => (
     <button
       class="flex items-center gap-3 px-3 py-2.5 rounded-md active:bg-surface-base w-full text-left"
       onClick={() => setActive(id)}
