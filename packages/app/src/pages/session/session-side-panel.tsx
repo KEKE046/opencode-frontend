@@ -12,6 +12,8 @@ import type { SnapshotFileDiff, VcsFileDiff } from "@opencode-ai/sdk/v2"
 import { ConstrainDragYAxis, getDraggableId } from "@/utils/solid-dnd"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useFileComponent } from "@opencode-ai/ui/context/file"
+import { createLineCommentController } from "@opencode-ai/ui/line-comment-annotations"
+import { cloneSelectedLineRange, previewSelectedLines } from "@opencode-ai/ui/pierre/selection-bridge"
 import { Dynamic } from "solid-js/web"
 import { sampledChecksum } from "@opencode-ai/util/encode"
 import { getFilename } from "@opencode-ai/util/path"
@@ -20,8 +22,10 @@ import FileTree from "@/components/file-tree"
 import { SessionContextUsage } from "@/components/session-context-usage"
 import { SessionContextTab, SortableTab, FileVisual } from "@/components/session"
 import { useCommand } from "@/context/command"
-import { useFile, type SelectedLineRange } from "@/context/file"
+import { selectionFromLines, useFile, type SelectedLineRange } from "@/context/file"
+import { useComments } from "@/context/comments"
 import { useLanguage } from "@/context/language"
+import { usePrompt } from "@/context/prompt"
 import { useLayout } from "@/context/layout"
 import { createFileTabListSync } from "@/pages/session/file-tab-scroll"
 import { FileTabContent } from "@/pages/session/file-tabs"
@@ -48,6 +52,8 @@ export function SessionSidePanel(props: {
   const command = useCommand()
   const dialog = useDialog()
   const { sessionKey, tabs, view } = useSessionLayout()
+  const comments = useComments()
+  const prompt = usePrompt()
 
   const isDesktop = createMediaQuery("(min-width: 768px)")
 
@@ -172,6 +178,114 @@ export function SessionSidePanel(props: {
   })
   const contents = createMemo(() => viewed()?.content?.content ?? "")
   const cache = createMemo(() => sampledChecksum(contents()))
+
+  const [note, setNote] = createStore({
+    openedComment: null as string | null,
+    commenting: null as SelectedLineRange | null,
+    selected: null as SelectedLineRange | null,
+  })
+
+  const fileComments = createMemo(() => {
+    const p = mobile.preview
+    if (!p) return []
+    return comments.list(p)
+  })
+
+  const commentedLines = createMemo(() => fileComments().map((c) => c.selection))
+
+  const syncSelected = (range: SelectedLineRange | null) => {
+    const p = mobile.preview
+    if (!p) return
+    file.setSelectedLines(p, range ? cloneSelectedLineRange(range) : null)
+  }
+
+  const activeSelection = createMemo((): SelectedLineRange | null => {
+    const p = mobile.preview
+    if (!p) return null
+    return note.selected ?? (file.selectedLines(p) as SelectedLineRange | undefined) ?? null
+  })
+
+  const buildPreview = (path: string, sel: ReturnType<typeof selectionFromLines>) => {
+    const source = path === mobile.preview ? contents() : file.get(path)?.content?.content
+    if (!source) return undefined
+    return previewSelectedLines(source, { start: sel.startLine, end: sel.endLine })
+  }
+
+  const addCommentToContext = (input: {
+    file: string
+    selection: SelectedLineRange
+    comment: string
+    preview?: string
+    origin?: "review" | "file"
+  }) => {
+    const sel = selectionFromLines(input.selection)
+    const prev = input.preview ?? buildPreview(input.file, sel)
+    const saved = comments.add({ file: input.file, selection: input.selection, comment: input.comment })
+    prompt.context.add({
+      type: "file",
+      path: input.file,
+      selection: sel,
+      comment: input.comment,
+      commentID: saved.id,
+      commentOrigin: input.origin,
+      preview: prev,
+    })
+  }
+
+  const updateCommentInContext = (input: {
+    id: string
+    file: string
+    selection: SelectedLineRange
+    comment: string
+  }) => {
+    comments.update(input.file, input.id, input.comment)
+    const sel = selectionFromLines(input.selection)
+    const prev = input.file === mobile.preview ? buildPreview(input.file, sel) : undefined
+    prompt.context.updateComment(input.file, input.id, {
+      comment: input.comment,
+      ...(prev ? { preview: prev } : {}),
+    })
+  }
+
+  const removeCommentFromContext = (input: { id: string; file: string }) => {
+    comments.remove(input.file, input.id)
+    prompt.context.removeComment(input.file, input.id)
+  }
+
+  const commentsUi = createLineCommentController({
+    comments: fileComments,
+    label: language.t("ui.lineComment.submit"),
+    draftKey: () => mobile.preview ?? "",
+    state: {
+      opened: () => note.openedComment,
+      setOpened: (id) => setNote("openedComment", id),
+      selected: () => note.selected,
+      setSelected: (range) => setNote("selected", range),
+      commenting: () => note.commenting,
+      setCommenting: (range) => setNote("commenting", range),
+      syncSelected,
+      hoverSelected: syncSelected,
+    },
+    getHoverSelectedRange: activeSelection,
+    cancelDraftOnCommentToggle: true,
+    clearSelectionOnSelectionEndNull: true,
+    onSubmit: ({ comment, selection }) => {
+      const p = mobile.preview
+      if (!p) return
+      addCommentToContext({ file: p, selection, comment, origin: "file" })
+    },
+    onUpdate: ({ id, comment, selection }) => {
+      const p = mobile.preview
+      if (!p) return
+      updateCommentInContext({ id, file: p, selection, comment })
+    },
+    onDelete: (c) => {
+      const p = mobile.preview
+      if (!p) return
+      removeCommentFromContext({ id: c.id, file: p })
+    },
+    editSubmitLabel: language.t("common.save"),
+  })
 
   const dismiss = () => {
     setMobile("preview", undefined)
@@ -541,6 +655,20 @@ export function SessionSidePanel(props: {
                       name: mobile.preview ?? "",
                       contents: contents(),
                       cacheKey: cache(),
+                    }}
+                    enableLineSelection
+                    enableHoverUtility
+                    selectedLines={activeSelection()}
+                    commentedLines={commentedLines()}
+                    annotations={commentsUi.annotations()}
+                    renderAnnotation={commentsUi.renderAnnotation}
+                    renderHoverUtility={commentsUi.renderHoverUtility}
+                    onLineSelected={(range: SelectedLineRange | null) => {
+                      commentsUi.onLineSelected(range)
+                    }}
+                    onLineNumberSelectionEnd={commentsUi.onLineNumberSelectionEnd}
+                    onLineSelectionEnd={(range: SelectedLineRange | null) => {
+                      commentsUi.onLineSelectionEnd(range)
                     }}
                     class="select-text"
                   />
