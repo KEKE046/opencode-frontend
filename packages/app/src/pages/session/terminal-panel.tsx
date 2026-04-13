@@ -185,13 +185,9 @@ export function TerminalPanel() {
   return (
     <>
     {/* Mobile backdrop */}
-    <Show when={!isDesktop()}>
+    <Show when={!isDesktop() && opened()}>
       <div
-        classList={{
-          "fixed inset-x-0 top-10 bottom-0 z-40 transition-opacity duration-200": true,
-          "opacity-100 pointer-events-auto": opened(),
-          "opacity-0 pointer-events-none": !opened(),
-        }}
+        class="fixed inset-x-0 top-10 bottom-0 z-40"
         onClick={close}
       />
     </Show>
@@ -209,10 +205,9 @@ export function TerminalPanel() {
         "border-t border-border-weak-base": isDesktop() && opened(),
         "transition-[height] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[height] motion-reduce:transition-none":
           isDesktop() && !size.active(),
-        // Mobile: full-screen overlay
-        "fixed inset-x-0 top-10 bottom-0 z-50 transition-transform duration-200 ease-out": !isDesktop(),
-        "translate-y-0": !isDesktop() && opened(),
-        "translate-y-full": !isDesktop() && !opened(),
+        // Mobile: full-screen overlay when open, hidden when closed
+        "fixed inset-x-0 top-10 bottom-0 z-50": !isDesktop() && opened(),
+        "hidden": !isDesktop() && !opened(),
       }}
       style={isDesktop() ? { height: opened() ? `${pane()}px` : "0px" } : undefined}
     >
