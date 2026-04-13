@@ -1,7 +1,9 @@
-import { Match, Show, Switch, createMemo } from "solid-js"
+import { Match, Show, Switch, createEffect, createMemo, createSignal } from "solid-js"
+import { createMediaQuery } from "@solid-primitives/media"
 import { Tooltip, type TooltipProps } from "@opencode-ai/ui/tooltip"
 import { ProgressCircle } from "@opencode-ai/ui/progress-circle"
 import { Button } from "@opencode-ai/ui/button"
+import { IconButton } from "@opencode-ai/ui/icon-button"
 
 import { useFile } from "@/context/file"
 import { useLayout } from "@/context/layout"
@@ -9,6 +11,7 @@ import { useSync } from "@/context/sync"
 import { useLanguage } from "@/context/language"
 import { useProviders } from "@/hooks/use-providers"
 import { getSessionContextMetrics } from "@/components/session/session-context-metrics"
+import { SessionContextTab } from "@/components/session/session-context-tab"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { createSessionTabs } from "@/pages/session/helpers"
 
@@ -37,6 +40,8 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
   const { params, tabs, view } = useSessionLayout()
 
   const variant = createMemo(() => props.variant ?? "button")
+  const desktop = createMediaQuery("(min-width: 768px)")
+  const [overlay, setOverlay] = createSignal(false)
   const tabState = createSessionTabs({
     tabs,
     pathFromTab: file.pathFromTab,
@@ -58,8 +63,17 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
     return usd().format(metrics().totalCost)
   })
 
+  createEffect(() => {
+    if (desktop()) setOverlay(false)
+  })
+
   const openContext = () => {
     if (!params.id) return
+
+    if (!desktop()) {
+      setOverlay((v) => !v)
+      return
+    }
 
     if (tabState.activeTab() === "context") {
       tabs().close("context")
@@ -119,6 +133,37 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
           </Match>
         </Switch>
       </Tooltip>
+
+      {/* Mobile context overlay */}
+      <Show when={!desktop()}>
+        <div
+          classList={{
+            "fixed inset-x-0 top-10 bottom-0 z-40 transition-opacity duration-200": true,
+            "opacity-100 pointer-events-auto": overlay(),
+            "opacity-0 pointer-events-none": !overlay(),
+          }}
+          onClick={() => setOverlay(false)}
+        />
+        <div
+          data-component="mobile-context-overlay"
+          classList={{
+            "fixed top-10 bottom-0 right-0 z-50 w-full bg-background-base flex flex-col border-l border-border-weaker-base transition-transform duration-200 ease-out": true,
+            "translate-x-0": overlay(),
+            "translate-x-full": !overlay(),
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div class="flex items-center h-10 px-3 shrink-0 border-b border-border-weaker-base">
+            <span class="flex-1 text-14-medium text-text-base truncate">
+              {language.t("session.tab.context")}
+            </span>
+            <IconButton icon="close-small" variant="ghost" onClick={() => setOverlay(false)} />
+          </div>
+          <div class="flex-1 min-h-0 overflow-auto">
+            <SessionContextTab />
+          </div>
+        </div>
+      </Show>
     </Show>
   )
 }
