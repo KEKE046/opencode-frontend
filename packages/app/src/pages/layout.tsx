@@ -578,10 +578,14 @@ export default function Layout(props: ParentProps) {
   const [autoselecting] = createResource(async () => {
     await ready.promise
     await layout.ready.promise
-    if (!untrack(() => state.autoselect)) return
-
     const list = layout.projects.list()
     const last = server.projects.last()
+
+    // Skip autoselect only when the URL already points to a project that is
+    // open in the sidebar for THIS server. A stale dir from a previous server
+    // (after a server switch) must NOT block autoselect.
+    const validDir = initialDirectory && list.some((p) => p.worktree === initialDirectory)
+    if (validDir) return
 
     if (list.length === 0) {
       if (!last) return
