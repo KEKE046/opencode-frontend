@@ -133,6 +133,17 @@
     width: min(calc(100vw - 32px), 960px);
     height: min(calc(100vh - 32px), 600px);
   }
+
+  @media (max-width: 639px) {
+    &[data-size="x-large"] [data-slot="dialog-container"] {
+      width: 100vw;
+      height: 100dvh;
+    }
+    &[data-size="x-large"] [data-slot="dialog-content"] {
+      border-radius: 0;
+      box-shadow: none;
+    }
+  }
 }
 
 [data-component="dialog"][data-transition] [data-slot="dialog-content"] {

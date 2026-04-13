@@ -515,7 +515,7 @@ export function SessionSidePanel(props: {
           <Show
             when={mobile.preview}
             fallback={
-              <div class="px-3 py-0">
+              <div class="px-3 py-0 [&_.filetree-icon--color]:opacity-100 [&_.filetree-icon--mono]:opacity-0">
                 <Switch>
                   <Match when={nofiles()}>{empty(language.t("session.files.empty"))}</Match>
                   <Match when={true}>
