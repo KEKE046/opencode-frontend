@@ -1,5 +1,5 @@
 import { createSimpleContext } from "@opencode-ai/ui/context"
-import { type Accessor, batch, createEffect, createMemo, onCleanup } from "solid-js"
+import { type Accessor, batch, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import { createStore } from "solid-js/store"
 import { Persist, persisted } from "@/utils/persist"
 import { useCheckServerHealth } from "@/utils/server-health"
@@ -132,6 +132,9 @@ export const { use: useServer, provider: ServerProvider } = createSimpleContext(
 
     const url = (x: StoredServer) => (typeof x === "string" ? x : "type" in x ? x.http.url : x.url)
 
+    // Track gateway servers removed in this session (props.servers is immutable)
+    const [removed, setRemoved] = createSignal(new Set<string>())
+
     const allServers = createMemo((): Array<ServerConnection.Any> => {
       // In gateway mode, server list comes from props.servers (fetched from /gateway/servers)
       // and store.list additions from the current session. Skip old store.list entries
@@ -146,7 +149,12 @@ export const { use: useServer, provider: ServerProvider } = createSimpleContext(
             typeof value === "string" ? { type: "http" as const, http: { url: value } } : value,
           )
 
-      const servers = [...(props.servers ?? []), ...stored]
+      const rem = removed()
+      const injected = gatewayEnabled
+        ? (props.servers ?? []).filter((s) => !rem.has(ServerConnection.key(s)))
+        : (props.servers ?? [])
+
+      const servers = [...injected, ...stored]
 
       const deduped = new Map(
         servers.map((value) => {
@@ -212,11 +220,13 @@ export const { use: useServer, provider: ServerProvider } = createSimpleContext(
 
     function remove(key: ServerConnection.Key) {
       const list = store.list.filter((x) => url(x) !== key)
+      // Track removed gateway servers so props.servers is filtered
+      if (gatewayEnabled) setRemoved((prev) => new Set([...prev, key]))
       batch(() => {
         setStore("list", list)
         if (state.active === key) {
-          const next = list[0]
-          setState("active", next ? ServerConnection.Key.make(url(next)) : props.defaultServer)
+          const next = allServers().find((s) => ServerConnection.key(s) !== key)
+          setState("active", next ? ServerConnection.key(next) : props.defaultServer)
         }
       })
     }

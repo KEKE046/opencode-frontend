@@ -54,9 +54,18 @@ async function load(): Promise<StorageData> {
   }
 }
 
+// Serialize writes to prevent TOCTOU races
+let pending: Promise<void> = Promise.resolve()
+
 async function save(data: StorageData) {
   await fs.mkdir(path.dirname(cfg), { recursive: true })
   await fs.writeFile(cfg, JSON.stringify(data, null, 2))
+}
+
+function serialized<T>(fn: () => Promise<T>): Promise<T> {
+  const result = pending.then(fn, fn)
+  pending = result.then(() => {}, () => {})
+  return result
 }
 
 function merge(base: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {
@@ -142,10 +151,15 @@ const app = new Hono()
     return c.json(safe)
   })
   .patch("/settings", async (c) => {
-    const patch = await c.req.json()
-    const next = merge(await load(), patch) as StorageData
-    next._ts = Date.now()
-    await save(next)
+    const patch = await c.req.json() as Record<string, unknown>
+    // Prevent injection of server registry via settings
+    delete patch.servers
+    delete patch._ts
+    await serialized(async () => {
+      const next = merge(await load(), patch) as StorageData
+      next._ts = Date.now()
+      await save(next)
+    })
     return c.body(null, 204)
   })
   .post("/gateway/servers", async (c) => {
@@ -155,18 +169,20 @@ const app = new Hono()
     const healthy = await checkHealth(body.url, body.username, body.password)
     if (!healthy) return c.json({ error: "server unreachable or unhealthy" }, 503)
     
-    const data = await load()
     const key = generateKey()
-    const servers = data.servers ?? {}
-    servers[key] = {
-      url: body.url,
-      name: body.name,
-      username: body.username,
-      password: body.password,
-    }
-    data.servers = servers
-    data._ts = Date.now()
-    await save(data)
+    await serialized(async () => {
+      const data = await load()
+      const servers = data.servers ?? {}
+      servers[key] = {
+        url: body.url.replace(/\/+$/, ""),
+        name: body.name,
+        username: body.username,
+        password: body.password,
+      }
+      data.servers = servers
+      data._ts = Date.now()
+      await save(data)
+    })
     
     return c.json({ key, name: body.name, healthy: true })
   })
@@ -182,37 +198,42 @@ const app = new Hono()
   })
   .delete("/gateway/servers/:key", async (c) => {
     const key = c.req.param("key")
-    const data = await load()
-    if (!data.servers?.[key]) return c.json({ error: "server not found" }, 404)
-    delete data.servers[key]
-    data._ts = Date.now()
-    await save(data)
-    return c.body(null, 204)
+    return serialized(async () => {
+      const data = await load()
+      if (!data.servers?.[key]) return c.json({ error: "server not found" }, 404)
+      delete data.servers[key]
+      data._ts = Date.now()
+      await save(data)
+      return c.body(null, 204)
+    })
   })
   .patch("/gateway/servers/:key", async (c) => {
     const key = c.req.param("key")
     const body = await c.req.json<{ url?: string; name?: string; username?: string; password?: string }>()
-    const data = await load()
-    const server = data.servers?.[key]
-    if (!server) return c.json({ error: "server not found" }, 404)
     
-    const url = body.url ?? server.url
-    const username = body.username ?? server.username
-    const password = body.password ?? server.password
-    
-    const healthy = await checkHealth(url, username, password)
-    if (!healthy) return c.json({ error: "server unreachable or unhealthy" }, 503)
-    
-    data.servers![key] = {
-      url,
-      name: body.name ?? server.name,
-      username,
-      password,
-    }
-    data._ts = Date.now()
-    await save(data)
-    
-    return c.json({ key, name: data.servers![key].name, healthy: true })
+    return serialized(async () => {
+      const data = await load()
+      const server = data.servers?.[key]
+      if (!server) return c.json({ error: "server not found" }, 404)
+      
+      const url = body.url ?? server.url
+      const username = body.username ?? server.username
+      const password = body.password ?? server.password
+      
+      const healthy = await checkHealth(url, username, password)
+      if (!healthy) return c.json({ error: "server unreachable or unhealthy" }, 503)
+      
+      data.servers![key] = {
+        url: url.replace(/\/+$/, ""),
+        name: body.name ?? server.name,
+        username,
+        password,
+      }
+      data._ts = Date.now()
+      await save(data)
+      
+      return c.json({ key, name: data.servers![key].name, healthy: true })
+    })
   })
   .all("/s/:key/*", async (c) => {
     const key = c.req.param("key")
@@ -254,7 +275,7 @@ const app = new Hono()
         headers: responseHeaders,
       })
     } catch (err) {
-      return c.json({ error: "proxy failed", message: String(err) }, 502)
+      return c.json({ error: "proxy failed" }, 502)
     }
   })
   .get("/*", async (c) => {
@@ -290,14 +311,14 @@ Bun.serve({
   fetch(req, server) {
     const url = new URL(req.url)
     
-    // WebSocket upgrade for PTY connections
-    if (req.headers.get("upgrade") === "websocket" && url.pathname.match(/^\/s\/[^/]+\/pty\/.+\/connect$/)) {
+    // WebSocket upgrade for proxy paths
+    if (req.headers.get("upgrade") === "websocket" && url.pathname.startsWith("/s/")) {
       const match = url.pathname.match(/^\/s\/([^/]+)(\/.+)$/)
       if (!match) return new Response("Invalid path", { status: 400 })
       
       const [, key, targetPath] = match
       const success = server.upgrade(req, {
-        data: { key, targetPath },
+        data: { key, targetPath, search: url.search },
       })
       return success ? undefined : new Response("WebSocket upgrade failed", { status: 500 })
     }
@@ -306,7 +327,7 @@ Bun.serve({
   },
   websocket: {
     async open(ws) {
-      const { key, targetPath } = ws.data as { key: string; targetPath: string }
+      const { key, targetPath, search } = ws.data as { key: string; targetPath: string; search: string }
       const data = await load()
       const server = data.servers?.[key]
       
@@ -315,12 +336,17 @@ Bun.serve({
         return
       }
       
-      const wsUrl = server.url.replace(/^http/, "ws") + targetPath
+      // Preserve query params (e.g. ?directory=...&cursor=...)
+      const wsUrl = server.url.replace(/^http/, "ws") + targetPath + (search || "")
+      const queue: (string | Buffer)[] = []
       const backendWs = new WebSocket(wsUrl, {
         headers: authHeader(server),
       })
       
       backendWs.onopen = () => {
+        // Flush buffered messages
+        for (const msg of queue) backendWs.send(msg)
+        queue.length = 0
         ws.data.backendWs = backendWs
       }
       
@@ -334,20 +360,26 @@ Bun.serve({
         ws.close(1011, "backend error")
       }
       
-      backendWs.onclose = () => {
-        ws.close()
+      backendWs.onclose = (event) => {
+        ws.close(event.code, event.reason)
       }
+      
+      ws.data.queue = queue
     },
     message(ws, msg) {
       const backendWs = ws.data.backendWs as WebSocket | undefined
       if (backendWs && backendWs.readyState === WebSocket.OPEN) {
         backendWs.send(msg)
+      } else {
+        // Buffer until backend connects
+        const queue = ws.data.queue as (string | Buffer)[] | undefined
+        if (queue) queue.push(msg)
       }
     },
-    close(ws) {
+    close(ws, code, reason) {
       const backendWs = ws.data.backendWs as WebSocket | undefined
       if (backendWs) {
-        backendWs.close()
+        backendWs.close(code, reason)
       }
     },
   },
