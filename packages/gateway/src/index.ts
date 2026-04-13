@@ -132,8 +132,9 @@ async function html(file: string) {
 
 const app = new Hono()
   .use(async (c, next) => {
-    // Skip compression for proxied requests (backend handles its own encoding)
-    if (c.req.path.startsWith("/s/")) return next()
+    const isProxy = c.req.path.startsWith("/s/")
+    const isSse = isProxy && (c.req.path.endsWith("/event") || c.req.path.endsWith("/sync-event"))
+    if (isSse) return next()
     return compress()(c, next)
   })
   .use(async (c, next) => {
