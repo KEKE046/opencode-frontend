@@ -13,6 +13,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
 import { type Duration, Effect } from "effect"
 import {
   type Component,
+  createEffect,
   createMemo,
   createResource,
   createSignal,
@@ -226,47 +227,165 @@ function ConnectionGate(props: ParentProps<{ disableHealthCheck?: boolean }>) {
 function ConnectionError(props: { onRetry?: () => void; onServerSelected?: (key: ServerConnection.Key) => void }) {
   const language = useLanguage()
   const server = useServer()
+  const checkServerHealth = useCheckServerHealth()
   const others = () => server.list.filter((s) => ServerConnection.key(s) !== server.key)
   const name = createMemo(() => server.name || server.key)
   const serverToken = "\u0000server\u0000"
   const unreachable = createMemo(() => language.t("app.server.unreachable", { server: serverToken }).split(serverToken))
+  const [managing, setManaging] = createSignal(false)
+  const gateway = typeof document !== "undefined" && !!document.querySelector('meta[name="opencode-gateway"]')
 
-  const timer = setInterval(() => props.onRetry?.(), 1000)
+  const [form, setForm] = createStore({
+    url: "",
+    name: "",
+    username: "opencode",
+    password: "",
+    error: "",
+    busy: false,
+    status: undefined as boolean | undefined,
+  })
+
+  async function submit() {
+    const normalized = normalizeServerUrl(form.url)
+    if (!normalized) return
+    setForm("busy", true)
+    setForm("error", "")
+
+    if (gateway) {
+      try {
+        const res = await fetch("/gateway/servers", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            url: normalized,
+            name: form.name.trim() || undefined,
+            username: form.username || undefined,
+            password: form.password || undefined,
+          }),
+        })
+        if (!res.ok) {
+          setForm({ error: language.t("dialog.server.add.error"), busy: false })
+          return
+        }
+        const data = await res.json() as { key: string; name?: string; healthy: boolean }
+        const conn: ServerConnection.Http = {
+          type: "http",
+          displayName: data.name,
+          http: { url: `${location.origin}/s/${data.key}` },
+          gatewayKey: data.key,
+        }
+        server.add(conn)
+        server.setActive(ServerConnection.key(conn))
+      } catch {
+        setForm({ error: language.t("dialog.server.add.error"), busy: false })
+        return
+      }
+    } else {
+      const conn: ServerConnection.Http = {
+        type: "http",
+        http: { url: normalized },
+      }
+      if (form.name.trim()) conn.displayName = form.name.trim()
+      if (form.password) conn.http.password = form.password
+      if (form.password && form.username) conn.http.username = form.username
+      const result = await checkServerHealth(conn.http)
+      if (!result.healthy) {
+        setForm({ error: language.t("dialog.server.add.error"), busy: false })
+        return
+      }
+      server.add(conn)
+    }
+    setForm("busy", false)
+    setManaging(false)
+    props.onRetry?.()
+  }
+
+  const timer = setInterval(() => {
+    if (!managing()) props.onRetry?.()
+  }, 1000)
   onCleanup(() => clearInterval(timer))
 
   return (
-    <div class="h-dvh w-screen flex flex-col items-center justify-center bg-background-base gap-6 p-6">
-      <div class="flex flex-col items-center max-w-md text-center">
-        <Splash class="w-12 h-15 mb-4" />
-        <p class="text-14-regular text-text-base">
-          {unreachable()[0]}
-          <span class="text-text-strong font-medium">{name()}</span>
-          {unreachable()[1]}
-        </p>
-        <p class="mt-1 text-12-regular text-text-weak">{language.t("app.server.retrying")}</p>
-      </div>
-      <Show when={others().length > 0}>
-        <div class="flex flex-col gap-2 w-full max-w-sm">
-          <span class="text-12-regular text-text-base text-center">{language.t("app.server.otherServers")}</span>
-          <div class="flex flex-col gap-1 bg-surface-base rounded-lg p-2">
-            <For each={others()}>
-              {(conn) => {
-                const key = ServerConnection.key(conn)
-                return (
-                  <button
-                    type="button"
-                    class="flex items-center gap-3 w-full px-3 py-2 rounded-md hover:bg-surface-raised-base-hover transition-colors text-left"
-                    onClick={() => props.onServerSelected?.(key)}
-                  >
-                    <span class="text-14-regular text-text-strong truncate">{serverName(conn)}</span>
-                  </button>
-                )
-              }}
-            </For>
+    <Show
+      when={!managing()}
+      fallback={
+        <div class="h-dvh w-screen flex flex-col items-center justify-center bg-background-base gap-6 p-6">
+          <div class="flex flex-col items-center max-w-md text-center">
+            <Splash class="w-12 h-15 mb-4" />
+            <p class="text-14-medium text-text-strong">{language.t("app.server.manage")}</p>
+          </div>
+          <div class="w-full max-w-md">
+            <ServerForm
+              value={form.url}
+              name={form.name}
+              username={form.username}
+              password={form.password}
+              placeholder={language.t("dialog.server.add.placeholder")}
+              busy={form.busy}
+              error={form.error}
+              status={form.status}
+              onChange={(v) => setForm("url", v)}
+              onNameChange={(v) => setForm("name", v)}
+              onUsernameChange={(v) => setForm("username", v)}
+              onPasswordChange={(v) => setForm("password", v)}
+              onSubmit={submit}
+              onBack={() => setManaging(false)}
+            />
+            <div class="px-5 mt-3">
+              <Button
+                variant="primary"
+                size="large"
+                onClick={submit}
+                disabled={form.busy || !form.url.trim()}
+                class="px-3 py-1.5"
+              >
+                {form.busy ? language.t("dialog.server.add.checking") : language.t("app.server.noServer.connect")}
+              </Button>
+            </div>
           </div>
         </div>
-      </Show>
-    </div>
+      }
+    >
+      <div class="h-dvh w-screen flex flex-col items-center justify-center bg-background-base gap-6 p-6">
+        <div class="flex flex-col items-center max-w-md text-center">
+          <Splash class="w-12 h-15 mb-4" />
+          <p class="text-14-regular text-text-base">
+            {unreachable()[0]}
+            <span class="text-text-strong font-medium">{name()}</span>
+            {unreachable()[1]}
+          </p>
+          <p class="mt-1 text-12-regular text-text-weak">{language.t("app.server.retrying")}</p>
+          <button
+            type="button"
+            class="mt-4 px-4 py-2 rounded-md bg-surface-base hover:bg-surface-raised-base-hover text-14-regular text-text-strong transition-colors"
+            onClick={() => setManaging(true)}
+          >
+            {language.t("app.server.manage")}
+          </button>
+        </div>
+        <Show when={others().length > 0}>
+          <div class="flex flex-col gap-2 w-full max-w-sm">
+            <span class="text-12-regular text-text-base text-center">{language.t("app.server.otherServers")}</span>
+            <div class="flex flex-col gap-1 bg-surface-base rounded-lg p-2">
+              <For each={others()}>
+                {(conn) => {
+                  const key = ServerConnection.key(conn)
+                  return (
+                    <button
+                      type="button"
+                      class="flex items-center gap-3 w-full px-3 py-2 rounded-md hover:bg-surface-raised-base-hover transition-colors text-left"
+                      onClick={() => props.onServerSelected?.(key)}
+                    >
+                      <span class="text-14-regular text-text-strong truncate">{serverName(conn)}</span>
+                    </button>
+                  )
+                }}
+              </For>
+            </div>
+          </div>
+        </Show>
+      </div>
+    </Show>
   )
 }
 
@@ -293,27 +412,59 @@ function NoServer() {
     status: undefined as boolean | undefined,
   })
 
+  const gateway = typeof document !== "undefined" && !!document.querySelector('meta[name="opencode-gateway"]')
+
   async function submit() {
     const normalized = normalizeServerUrl(form.url)
     if (!normalized) return
     setForm("busy", true)
     setForm("error", "")
 
-    const conn: ServerConnection.Http = {
-      type: "http",
-      http: { url: normalized },
-    }
-    if (form.name.trim()) conn.displayName = form.name.trim()
-    if (form.password) conn.http.password = form.password
-    if (form.password && form.username) conn.http.username = form.username
+    if (gateway) {
+      try {
+        const res = await fetch("/gateway/servers", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            url: normalized,
+            name: form.name.trim() || undefined,
+            username: form.username || undefined,
+            password: form.password || undefined,
+          }),
+        })
+        if (!res.ok) {
+          setForm({ error: language.t("dialog.server.add.error"), busy: false })
+          return
+        }
+        const data = await res.json() as { key: string; name?: string; healthy: boolean }
+        const conn: ServerConnection.Http = {
+          type: "http",
+          displayName: data.name,
+          http: { url: `${location.origin}/s/${data.key}` },
+          gatewayKey: data.key,
+        }
+        server.add(conn)
+        server.setActive(ServerConnection.key(conn))
+      } catch {
+        setForm({ error: language.t("dialog.server.add.error"), busy: false })
+        return
+      }
+    } else {
+      const conn: ServerConnection.Http = {
+        type: "http",
+        http: { url: normalized },
+      }
+      if (form.name.trim()) conn.displayName = form.name.trim()
+      if (form.password) conn.http.password = form.password
+      if (form.password && form.username) conn.http.username = form.username
 
-    const result = await checkServerHealth(conn.http)
-    if (!result.healthy) {
-      setForm({ error: language.t("dialog.server.add.error"), busy: false })
-      return
+      const result = await checkServerHealth(conn.http)
+      if (!result.healthy) {
+        setForm({ error: language.t("dialog.server.add.error"), busy: false })
+        return
+      }
+      server.add(conn)
     }
-
-    server.add(conn)
     setForm("busy", false)
   }
 

@@ -2,7 +2,7 @@ import { Hono } from "hono"
 import { compress } from "hono/compress"
 import { getMimeType } from "hono/utils/mime"
 import { parseArgs } from "node:util"
-import { createHash } from "node:crypto"
+import { createHash, randomBytes } from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
 
@@ -33,7 +33,20 @@ const assets: Record<string, string> | null = await import("gateway-assets.gen.t
 
 // --- storage ---
 
-async function load(): Promise<Record<string, unknown>> {
+type ServerInfo = {
+  url: string
+  name?: string
+  username?: string
+  password?: string
+}
+
+type StorageData = {
+  _ts?: number
+  servers?: Record<string, ServerInfo>
+  [key: string]: unknown
+}
+
+async function load(): Promise<StorageData> {
   try {
     return JSON.parse(await fs.readFile(cfg, "utf8"))
   } catch {
@@ -41,7 +54,7 @@ async function load(): Promise<Record<string, unknown>> {
   }
 }
 
-async function save(data: Record<string, unknown>) {
+async function save(data: StorageData) {
   await fs.mkdir(path.dirname(cfg), { recursive: true })
   await fs.writeFile(cfg, JSON.stringify(data, null, 2))
 }
@@ -59,6 +72,32 @@ function merge(base: Record<string, unknown>, patch: Record<string, unknown>): R
     else out[k] = v
   }
   return out
+}
+
+// --- server registry ---
+
+function generateKey(): string {
+  return randomBytes(6).toString("base64url")
+}
+
+async function checkHealth(url: string, username?: string, password?: string): Promise<boolean> {
+  try {
+    const headers: Record<string, string> = {}
+    if (username || password) {
+      const token = Buffer.from(`${username || ""}:${password || ""}`).toString("base64")
+      headers.Authorization = `Basic ${token}`
+    }
+    const res = await fetch(`${url}/global/health`, { headers, signal: AbortSignal.timeout(5000) })
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
+function authHeader(server: ServerInfo): Record<string, string> {
+  if (!server.username && !server.password) return {}
+  const token = Buffer.from(`${server.username || ""}:${server.password || ""}`).toString("base64")
+  return { Authorization: `Basic ${token}` }
 }
 
 // --- logging ---
@@ -83,25 +122,140 @@ async function html(file: string) {
 // --- app ---
 
 const app = new Hono()
-  .use(compress())
+  .use(async (c, next) => {
+    // Skip compression for proxied requests (backend handles its own encoding)
+    if (c.req.path.startsWith("/s/")) return next()
+    return compress()(c, next)
+  })
   .use(async (c, next) => {
     const start = performance.now()
     await next()
     log(c.req.method, c.req.path, c.res.status, Math.round(performance.now() - start))
   })
-  .get("/ui/settings", async (c) => {
+  .get("/settings", async (c) => {
     const data = await load()
-    const tag = `"${createHash("md5").update(JSON.stringify(data)).digest("hex")}"`
+    // Exclude server registry (contains credentials) from settings response
+    const { servers: _, ...safe } = data
+    const tag = `"${createHash("md5").update(JSON.stringify(safe)).digest("hex")}"`
     if (c.req.header("if-none-match") === tag) return c.body(null, 304)
     c.header("ETag", tag)
-    return c.json(data)
+    return c.json(safe)
   })
-  .patch("/ui/settings", async (c) => {
+  .patch("/settings", async (c) => {
     const patch = await c.req.json()
-    const next = merge(await load(), patch)
+    const next = merge(await load(), patch) as StorageData
     next._ts = Date.now()
     await save(next)
     return c.body(null, 204)
+  })
+  .post("/gateway/servers", async (c) => {
+    const body = await c.req.json<{ url: string; name?: string; username?: string; password?: string }>()
+    if (!body.url) return c.json({ error: "url required" }, 400)
+    
+    const healthy = await checkHealth(body.url, body.username, body.password)
+    if (!healthy) return c.json({ error: "server unreachable or unhealthy" }, 503)
+    
+    const data = await load()
+    const key = generateKey()
+    const servers = data.servers ?? {}
+    servers[key] = {
+      url: body.url,
+      name: body.name,
+      username: body.username,
+      password: body.password,
+    }
+    data.servers = servers
+    data._ts = Date.now()
+    await save(data)
+    
+    return c.json({ key, name: body.name, healthy: true })
+  })
+  .get("/gateway/servers", async (c) => {
+    const data = await load()
+    const servers = data.servers ?? {}
+    const list = Object.entries(servers).map(([key, info]) => ({
+      key,
+      name: info.name,
+      healthy: true,
+    }))
+    return c.json(list)
+  })
+  .delete("/gateway/servers/:key", async (c) => {
+    const key = c.req.param("key")
+    const data = await load()
+    if (!data.servers?.[key]) return c.json({ error: "server not found" }, 404)
+    delete data.servers[key]
+    data._ts = Date.now()
+    await save(data)
+    return c.body(null, 204)
+  })
+  .patch("/gateway/servers/:key", async (c) => {
+    const key = c.req.param("key")
+    const body = await c.req.json<{ url?: string; name?: string; username?: string; password?: string }>()
+    const data = await load()
+    const server = data.servers?.[key]
+    if (!server) return c.json({ error: "server not found" }, 404)
+    
+    const url = body.url ?? server.url
+    const username = body.username ?? server.username
+    const password = body.password ?? server.password
+    
+    const healthy = await checkHealth(url, username, password)
+    if (!healthy) return c.json({ error: "server unreachable or unhealthy" }, 503)
+    
+    data.servers![key] = {
+      url,
+      name: body.name ?? server.name,
+      username,
+      password,
+    }
+    data._ts = Date.now()
+    await save(data)
+    
+    return c.json({ key, name: data.servers![key].name, healthy: true })
+  })
+  .all("/s/:key/*", async (c) => {
+    const key = c.req.param("key")
+    const data = await load()
+    const server = data.servers?.[key]
+    if (!server) return c.json({ error: "server not found" }, 404)
+    
+    // Preserve query string
+    const url = new URL(c.req.url)
+    const targetPath = c.req.path.replace(`/s/${key}`, "")
+    const targetUrl = server.url + targetPath + url.search
+    
+    // Forward headers, strip hop-by-hop + accept-encoding (let Bun handle decompression)
+    const headers = new Headers()
+    for (const [name, value] of Object.entries(c.req.header())) {
+      if (["host", "connection", "keep-alive", "transfer-encoding", "accept-encoding"].includes(name.toLowerCase())) continue
+      headers.set(name, value)
+    }
+    const auth = authHeader(server)
+    if (auth.Authorization) headers.set("Authorization", auth.Authorization)
+    
+    try {
+      const res = await fetch(targetUrl, {
+        method: c.req.method,
+        headers,
+        body: ["GET", "HEAD"].includes(c.req.method) ? undefined : c.req.raw.body,
+        redirect: "manual",
+      })
+      
+      const responseHeaders = new Headers()
+      for (const [name, value] of res.headers.entries()) {
+        if (["connection", "keep-alive", "transfer-encoding", "content-encoding", "content-length"].includes(name.toLowerCase())) continue
+        responseHeaders.set(name, value)
+      }
+      
+      return new Response(res.body, {
+        status: res.status,
+        statusText: res.statusText,
+        headers: responseHeaders,
+      })
+    } catch (err) {
+      return c.json({ error: "proxy failed", message: String(err) }, 502)
+    }
   })
   .get("/*", async (c) => {
     if (!assets) return c.text("opencode-gateway: no embedded assets (run build first)", 404)
@@ -130,6 +284,73 @@ const app = new Hono()
 
 // --- listen ---
 
-Bun.serve({ fetch: app.fetch, port, hostname })
+Bun.serve({
+  port,
+  hostname,
+  fetch(req, server) {
+    const url = new URL(req.url)
+    
+    // WebSocket upgrade for PTY connections
+    if (req.headers.get("upgrade") === "websocket" && url.pathname.match(/^\/s\/[^/]+\/pty\/.+\/connect$/)) {
+      const match = url.pathname.match(/^\/s\/([^/]+)(\/.+)$/)
+      if (!match) return new Response("Invalid path", { status: 400 })
+      
+      const [, key, targetPath] = match
+      const success = server.upgrade(req, {
+        data: { key, targetPath },
+      })
+      return success ? undefined : new Response("WebSocket upgrade failed", { status: 500 })
+    }
+    
+    return app.fetch(req)
+  },
+  websocket: {
+    async open(ws) {
+      const { key, targetPath } = ws.data as { key: string; targetPath: string }
+      const data = await load()
+      const server = data.servers?.[key]
+      
+      if (!server) {
+        ws.close(1008, "server not found")
+        return
+      }
+      
+      const wsUrl = server.url.replace(/^http/, "ws") + targetPath
+      const backendWs = new WebSocket(wsUrl, {
+        headers: authHeader(server),
+      })
+      
+      backendWs.onopen = () => {
+        ws.data.backendWs = backendWs
+      }
+      
+      backendWs.onmessage = (event) => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(event.data)
+        }
+      }
+      
+      backendWs.onerror = () => {
+        ws.close(1011, "backend error")
+      }
+      
+      backendWs.onclose = () => {
+        ws.close()
+      }
+    },
+    message(ws, msg) {
+      const backendWs = ws.data.backendWs as WebSocket | undefined
+      if (backendWs && backendWs.readyState === WebSocket.OPEN) {
+        backendWs.send(msg)
+      }
+    },
+    close(ws) {
+      const backendWs = ws.data.backendWs as WebSocket | undefined
+      if (backendWs) {
+        backendWs.close()
+      }
+    },
+  },
+})
 console.log(`opencode-gateway http://${hostname}:${port}`)
 console.log(`config: ${cfg}`)

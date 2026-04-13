@@ -39,6 +39,7 @@ export const { use: useGlobalSDK, provider: GlobalSDKProvider } = createSimpleCo
       signal: abort.signal,
       fetch: eventFetch,
       server: currentServer.http,
+      gatewayKey: currentServer.type === "http" ? currentServer.gatewayKey : undefined,
     })
     const emitter = createGlobalEmitter<{
       [key: string]: Event
@@ -226,6 +227,7 @@ export const { use: useGlobalSDK, provider: GlobalSDKProvider } = createSimpleCo
       server: server.current.http,
       fetch: platform.fetch,
       throwOnError: true,
+      gatewayKey: server.current.type === "http" ? server.current.gatewayKey : undefined,
     })
 
     return {
@@ -242,6 +244,7 @@ export const { use: useGlobalSDK, provider: GlobalSDKProvider } = createSimpleCo
         return createSdkForServer({
           server: s.http,
           fetch: platform.fetch,
+          gatewayKey: s.type === "http" ? s.gatewayKey : undefined,
           ...opts,
         })
       },

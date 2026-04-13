@@ -313,6 +313,7 @@ export const dict = {
 
   "app.server.unreachable": "Could not reach {{server}}",
   "app.server.retrying": "Retrying automatically...",
+  "app.server.manage": "Manage Servers",
   "app.server.otherServers": "Other servers",
   "app.server.noServer.title": "No server configured",
   "app.server.noServer.description": "Add a server to get started",

@@ -7,6 +7,7 @@ import { useCheckServerHealth } from "@/utils/server-health"
 type StoredProject = { worktree: string; expanded: boolean }
 type StoredServer = string | ServerConnection.HttpBase | ServerConnection.Http
 const HEALTH_POLL_INTERVAL_MS = 10_000
+const gatewayEnabled = typeof document !== "undefined" && !!document.querySelector('meta[name="opencode-gateway"]')
 
 export function normalizeServerUrl(input: string) {
   const trimmed = input.trim()
@@ -46,6 +47,7 @@ export namespace ServerConnection {
   export type Http = {
     type: "http"
     http: HttpBase
+    gatewayKey?: string
   } & Base
 
   export type Sidecar = {
@@ -131,17 +133,20 @@ export const { use: useServer, provider: ServerProvider } = createSimpleContext(
     const url = (x: StoredServer) => (typeof x === "string" ? x : "type" in x ? x.http.url : x.url)
 
     const allServers = createMemo((): Array<ServerConnection.Any> => {
-      const servers = [
-        ...(props.servers ?? []),
-        ...store.list.map((value) =>
-          typeof value === "string"
-            ? {
-                type: "http" as const,
-                http: { url: value },
-              }
-            : value,
-        ),
-      ]
+      // In gateway mode, server list comes from props.servers (fetched from /gateway/servers)
+      // and store.list additions from the current session. Skip old store.list entries
+      // that have raw backend URLs (not proxy paths).
+      const stored = gatewayEnabled
+        ? store.list
+            .map((value) =>
+              typeof value === "string" ? { type: "http" as const, http: { url: value } } : value,
+            )
+            .filter((v) => "gatewayKey" in v)
+        : store.list.map((value) =>
+            typeof value === "string" ? { type: "http" as const, http: { url: value } } : value,
+          )
+
+      const servers = [...(props.servers ?? []), ...stored]
 
       const deduped = new Map(
         servers.map((value) => {

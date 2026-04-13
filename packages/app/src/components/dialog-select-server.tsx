@@ -18,6 +18,7 @@ import { normalizeServerUrl, ServerConnection, useServer } from "@/context/serve
 import { type ServerHealth, useCheckServerHealth } from "@/utils/server-health"
 
 const DEFAULT_USERNAME = "opencode"
+const gatewayEnabled = typeof document !== "undefined" && document.querySelector('meta[name="opencode-gateway"]')
 
 interface ServerFormProps {
   value: string
@@ -93,6 +94,8 @@ function useServerPreview() {
     setStatus: (value: boolean | undefined) => void,
   ) => {
     setStatus(undefined)
+    // In gateway mode, skip live preview — URL is not reachable from browser
+    if (gatewayEnabled) return
     if (!looksComplete(value)) return
     const normalized = normalizeServerUrl(value)
     if (!normalized) return
@@ -233,21 +236,48 @@ export function DialogSelectServer() {
         return
       }
 
-      const conn: ServerConnection.Http = {
-        type: "http",
-        http: { url: normalized },
+      if (gatewayEnabled) {
+        // Gateway mode: register server with gateway
+        const res = await fetch("/gateway/servers", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            url: normalized,
+            name: store.addServer.name.trim() || undefined,
+            username: store.addServer.username || undefined,
+            password: store.addServer.password || undefined,
+          }),
+        })
+        if (!res.ok) {
+          setStore("addServer", { error: language.t("dialog.server.add.error") })
+          return
+        }
+        const data = await res.json() as { key: string; name?: string; healthy: boolean }
+        const conn: ServerConnection.Http = {
+          type: "http",
+          displayName: data.name,
+          http: { url: `${location.origin}/s/${data.key}` },
+          gatewayKey: data.key,
+        }
+        resetAdd()
+        await select(conn, true)
+      } else {
+        // Direct mode: health check from browser
+        const conn: ServerConnection.Http = {
+          type: "http",
+          http: { url: normalized },
+        }
+        if (store.addServer.name.trim()) conn.displayName = store.addServer.name.trim()
+        if (store.addServer.password) conn.http.password = store.addServer.password
+        if (store.addServer.password && store.addServer.username) conn.http.username = store.addServer.username
+        const result = await checkServerHealth(conn.http)
+        if (!result.healthy) {
+          setStore("addServer", { error: language.t("dialog.server.add.error") })
+          return
+        }
+        resetAdd()
+        await select(conn, true)
       }
-      if (store.addServer.name.trim()) conn.displayName = store.addServer.name.trim()
-      if (store.addServer.password) conn.http.password = store.addServer.password
-      if (store.addServer.password && store.addServer.username) conn.http.username = store.addServer.username
-      const result = await checkServerHealth(conn.http)
-      if (!result.healthy) {
-        setStore("addServer", { error: language.t("dialog.server.add.error") })
-        return
-      }
-
-      resetAdd()
-      await select(conn, true)
     },
   }))
 
@@ -263,34 +293,62 @@ export function DialogSelectServer() {
       const name = store.editServer.name.trim() || undefined
       const username = store.editServer.username || undefined
       const password = store.editServer.password || undefined
-      const existingName = input.original.displayName
-      if (
-        normalized === input.original.http.url &&
-        name === existingName &&
-        username === input.original.http.username &&
-        password === input.original.http.password
-      ) {
-        resetEdit()
-        return
-      }
 
-      const conn: ServerConnection.Http = {
-        type: "http",
-        displayName: name,
-        http: { url: normalized, username, password },
-      }
-      const result = await checkServerHealth(conn.http)
-      if (!result.healthy) {
-        setStore("editServer", { error: language.t("dialog.server.add.error") })
-        return
-      }
-      if (normalized === input.original.http.url) {
+      if (gatewayEnabled && input.original.gatewayKey) {
+        // Gateway mode: update server via gateway API
+        const res = await fetch(`/gateway/servers/${input.original.gatewayKey}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            url: normalized,
+            name,
+            username,
+            password,
+          }),
+        })
+        if (!res.ok) {
+          setStore("editServer", { error: language.t("dialog.server.add.error") })
+          return
+        }
+        const data = await res.json() as { key: string; name?: string; healthy: boolean }
+        const conn: ServerConnection.Http = {
+          type: "http",
+          displayName: data.name,
+          http: { url: `${location.origin}/s/${data.key}` },
+          gatewayKey: data.key,
+        }
         server.add(conn)
+        resetEdit()
       } else {
-        replaceServer(input.original, conn)
-      }
+        // Direct mode: health check from browser
+        const existingName = input.original.displayName
+        if (
+          normalized === input.original.http.url &&
+          name === existingName &&
+          username === input.original.http.username &&
+          password === input.original.http.password
+        ) {
+          resetEdit()
+          return
+        }
 
-      resetEdit()
+        const conn: ServerConnection.Http = {
+          type: "http",
+          displayName: name,
+          http: { url: normalized, username, password },
+        }
+        const result = await checkServerHealth(conn.http)
+        if (!result.healthy) {
+          setStore("editServer", { error: language.t("dialog.server.add.error") })
+          return
+        }
+        if (normalized === input.original.http.url) {
+          server.add(conn)
+        } else {
+          replaceServer(input.original, conn)
+        }
+        resetEdit()
+      }
     },
   }))
 
@@ -496,6 +554,12 @@ export function DialogSelectServer() {
   })
 
   async function handleRemove(url: ServerConnection.Key) {
+    if (gatewayEnabled) {
+      const conn = server.list.find((s) => ServerConnection.key(s) === url)
+      if (conn?.type === "http" && conn.gatewayKey) {
+        await fetch(`/gateway/servers/${conn.gatewayKey}`, { method: "DELETE" })
+      }
+    }
     server.remove(url)
     if (server.list.length === 0) dialog.close()
     if ((await platform.getDefaultServer?.()) === url) {

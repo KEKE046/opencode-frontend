@@ -37,7 +37,7 @@ function gatewayFlush() {
   gatewayRaw = {}
   gatewayTimer = null
   if (!Object.keys(data).length) return
-  fetch(`${location.origin}/ui/settings`, {
+  fetch(`${location.origin}/settings`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
@@ -51,6 +51,8 @@ function gatewayFlush() {
 
 function gatewaySync(key: string, value: string | null) {
   if (!gatewayEnabled) return
+  // In gateway mode, server list is managed by /gateway/servers API, not settings sync
+  if (key === "server") return
   if (gatewaySynced.has(key) && gatewaySynced.get(key) === value) return
   try {
     gatewayPending[key] = value ? JSON.parse(value) : null
@@ -72,7 +74,7 @@ const TS_KEY = `${GLOBAL_STORAGE}:_gateway_ts`
 export async function gatewaySeed() {
   if (!gatewayEnabled) return
   try {
-    const res = await fetch(`${location.origin}/ui/settings`)
+    const res = await fetch(`${location.origin}/settings`)
     if (!res.ok) return
     gatewayEtag = res.headers.get("etag")
     const data = (await res.json()) as Record<string, unknown>
@@ -93,7 +95,7 @@ export async function gatewaySeed() {
 function gatewayPoll() {
   const headers: HeadersInit = {}
   if (gatewayEtag) headers["If-None-Match"] = gatewayEtag
-  fetch(`${location.origin}/ui/settings`, { headers })
+  fetch(`${location.origin}/settings`, { headers })
     .then(async (res) => {
       if (res.status === 304 || !res.ok) return
       gatewayEtag = res.headers.get("etag")

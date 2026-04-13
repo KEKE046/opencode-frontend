@@ -114,6 +114,23 @@ const getDefaultUrl = () => {
   return getCurrentUrl() ?? "none"
 }
 
+// Fetch gateway servers and construct ServerConnection objects
+async function fetchGatewayServers(): Promise<ServerConnection.Http[]> {
+  try {
+    const res = await fetch("/gateway/servers")
+    if (!res.ok) return []
+    const list = (await res.json()) as Array<{ key: string; name?: string; healthy: boolean }>
+    return list.map((s) => ({
+      type: "http" as const,
+      displayName: s.name,
+      http: { url: `${location.origin}/s/${s.key}` },
+      gatewayKey: s.key,
+    }))
+  } catch {
+    return []
+  }
+}
+
 const platform: Platform = {
   platform: "web",
   version: pkg.version,
@@ -130,14 +147,20 @@ const platform: Platform = {
 }
 
 if (gateway) await gatewaySeed()
+const gatewayServers = gateway ? await fetchGatewayServers() : []
 
 if (root instanceof HTMLElement) {
+  const defaultServer = gateway && gatewayServers.length > 0
+    ? ServerConnection.Key.make(ServerConnection.key(gatewayServers[0]))
+    : ServerConnection.Key.make(getDefaultUrl())
+
   render(
     () => (
       <PlatformProvider value={platform}>
         <AppBaseProviders>
           <AppInterface
-            defaultServer={ServerConnection.Key.make(getDefaultUrl())}
+            defaultServer={defaultServer}
+            servers={gateway ? gatewayServers : undefined}
             seed={getCurrentUrl()}
           />
         </AppBaseProviders>
