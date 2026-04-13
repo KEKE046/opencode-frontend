@@ -308,6 +308,7 @@ const app = new Hono()
 Bun.serve({
   port,
   hostname,
+  idleTimeout: 0,
   fetch(req, server) {
     const url = new URL(req.url)
     
