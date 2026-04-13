@@ -309,6 +309,17 @@
         "typescript": "catalog:",
       },
     },
+    "packages/gateway": {
+      "name": "@opencode-ai/gateway",
+      "version": "0.0.1",
+      "dependencies": {
+        "hono": "catalog:",
+      },
+      "devDependencies": {
+        "@tsconfig/bun": "catalog:",
+        "@types/bun": "catalog:",
+      },
+    },
     "packages/opencode": {
       "name": "opencode",
       "version": "1.4.3",
@@ -1520,6 +1531,8 @@
     "@opencode-ai/enterprise": ["@opencode-ai/enterprise@workspace:packages/enterprise"],
 
     "@opencode-ai/function": ["@opencode-ai/function@workspace:packages/function"],
+
+    "@opencode-ai/gateway": ["@opencode-ai/gateway@workspace:packages/gateway"],
 
     "@opencode-ai/plugin": ["@opencode-ai/plugin@workspace:packages/plugin"],
 
