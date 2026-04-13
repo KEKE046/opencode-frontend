@@ -285,13 +285,16 @@ const app = new Hono()
     const file = assets[key]
     if (file) {
       const mime = getMimeType(file) ?? "application/octet-stream"
+      const hashed = /-[A-Za-z0-9]{8,}\.\w+$/.test(key)
       if (!mime.startsWith("text/html")) {
         c.header("Content-Type", mime)
+        if (hashed) c.header("Cache-Control", "public, max-age=31536000, immutable")
         return c.body(new Uint8Array(await fs.readFile(file)))
       }
       const page = await html(file)
       c.header("Content-Security-Policy", page.csp)
       c.header("Content-Type", "text/html; charset=UTF-8")
+      c.header("Cache-Control", "no-cache")
       return c.body(page.body)
     }
     // SPA fallback: only for navigation requests (no file extension)
@@ -301,6 +304,7 @@ const app = new Hono()
     const page = await html(index)
     c.header("Content-Security-Policy", page.csp)
     c.header("Content-Type", "text/html; charset=UTF-8")
+    c.header("Cache-Control", "no-cache")
     return c.body(page.body)
   })
 
