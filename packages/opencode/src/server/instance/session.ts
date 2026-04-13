@@ -71,7 +71,15 @@ export const SessionRoutes = lazy(() =>
           search: query.search,
           limit: query.limit,
         })) {
-          sessions.push(session)
+          sessions.push({
+            ...session,
+            summary: session.summary
+              ? { additions: session.summary.additions, deletions: session.summary.deletions, files: session.summary.files }
+              : undefined,
+            revert: session.revert
+              ? { messageID: session.revert.messageID, partID: session.revert.partID }
+              : undefined,
+          })
         }
         return c.json(sessions)
       },
@@ -630,26 +638,20 @@ export const SessionRoutes = lazy(() =>
       async (c) => {
         const query = c.req.valid("query")
         const sessionID = c.req.valid("param").sessionID
-        if (query.limit === undefined) {
+        const limit = query.limit ?? 80
+        if (limit <= 0) {
           await Session.get(sessionID)
-          const messages = await Session.messages({ sessionID })
-          return c.json(messages)
-        }
-
-        if (query.limit === 0) {
-          await Session.get(sessionID)
-          const messages = await Session.messages({ sessionID })
-          return c.json(messages)
+          return c.json([])
         }
 
         const page = await MessageV2.page({
           sessionID,
-          limit: query.limit,
+          limit,
           before: query.before,
         })
         if (page.cursor) {
           const url = new URL(c.req.url)
-          url.searchParams.set("limit", query.limit.toString())
+          url.searchParams.set("limit", limit.toString())
           url.searchParams.set("before", page.cursor)
           c.header("Access-Control-Expose-Headers", "Link, X-Next-Cursor")
           c.header("Link", `<${url.toString()}>; rel=\"next\"`)
