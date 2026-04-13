@@ -89,10 +89,17 @@ const app = new Hono()
     await next()
     log(c.req.method, c.req.path, c.res.status, Math.round(performance.now() - start))
   })
-  .get("/ui/settings", async (c) => c.json(await load()))
+  .get("/ui/settings", async (c) => {
+    const data = await load()
+    const tag = `"${createHash("md5").update(JSON.stringify(data)).digest("hex")}"`
+    if (c.req.header("if-none-match") === tag) return c.body(null, 304)
+    c.header("ETag", tag)
+    return c.json(data)
+  })
   .patch("/ui/settings", async (c) => {
     const patch = await c.req.json()
     const next = merge(await load(), patch)
+    next._ts = Date.now()
     await save(next)
     return c.body(null, 204)
   })

@@ -7,6 +7,7 @@ import { dict as en } from "@/i18n/en"
 import { dict as zh } from "@/i18n/zh"
 import { handleNotificationClick } from "@/utils/notification-click"
 import pkg from "../package.json"
+import { gatewaySeed } from "@/utils/persist"
 import { ServerConnection } from "./context/server"
 
 const DEFAULT_SERVER_URL_KEY = "opencode.settings.dat:defaultServerUrl"
@@ -127,6 +128,8 @@ const platform: Platform = {
   },
   setDefaultServer: writeDefaultServerUrl,
 }
+
+if (gateway) await gatewaySeed()
 
 if (root instanceof HTMLElement) {
   render(
