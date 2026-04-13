@@ -17,6 +17,48 @@ type PersistTarget = {
   key: string
   legacy?: string[]
   migrate?: (value: unknown) => unknown
+  sync?: boolean
+}
+
+// --- gateway sync ---
+
+const gatewayEnabled =
+  typeof document !== "undefined" && !!document.querySelector('meta[name="opencode-gateway"]')
+
+let gatewayPending: Record<string, unknown> = {}
+let gatewayRaw: Record<string, string | null> = {}
+const gatewaySynced = new Map<string, string | null>()
+let gatewayTimer: ReturnType<typeof setTimeout> | null = null
+
+function gatewayFlush() {
+  const data = gatewayPending
+  const raw = gatewayRaw
+  gatewayPending = {}
+  gatewayRaw = {}
+  gatewayTimer = null
+  if (!Object.keys(data).length) return
+  fetch(`${location.origin}/ui/settings`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  })
+    .then(() => {
+      for (const k of Object.keys(raw)) gatewaySynced.set(k, raw[k])
+    })
+    .catch(() => {})
+}
+
+function gatewaySync(key: string, value: string | null) {
+  if (!gatewayEnabled) return
+  if (gatewaySynced.has(key) && gatewaySynced.get(key) === value) return
+  try {
+    gatewayPending[key] = value ? JSON.parse(value) : null
+    gatewayRaw[key] = value
+  } catch {
+    return
+  }
+  if (gatewayTimer) clearTimeout(gatewayTimer)
+  gatewayTimer = setTimeout(gatewayFlush, 500)
 }
 
 const LEGACY_STORAGE = "default.dat"
@@ -310,7 +352,7 @@ export const PersistTesting = {
 
 export const Persist = {
   global(key: string, legacy?: string[]): PersistTarget {
-    return { storage: GLOBAL_STORAGE, key, legacy }
+    return { storage: GLOBAL_STORAGE, key, legacy, sync: true }
   },
   workspace(dir: string, key: string, legacy?: string[]): PersistTarget {
     return { storage: workspaceStorage(dir), key: `workspace:${key}`, legacy }
@@ -399,9 +441,11 @@ export function persisted<T>(
         },
         setItem: (key, value) => {
           current.setItem(key, value)
+          if (config.sync) gatewaySync(key, value)
         },
         removeItem: (key) => {
           current.removeItem(key)
+          if (config.sync) gatewaySync(key, null)
         },
       }
 

@@ -127,7 +127,7 @@ function withFallback<T>(read: () => T | undefined, fallback: T) {
 export const { use: useSettings, provider: SettingsProvider } = createSimpleContext({
   name: "Settings",
   init: () => {
-    const [store, setStore, _, ready] = persisted("settings.v3", createStore<Settings>(defaultSettings))
+    const [store, setStore, _, ready] = persisted({ key: "settings.v3", sync: true }, createStore<Settings>(defaultSettings))
 
     createEffect(() => {
       if (typeof document === "undefined") return
