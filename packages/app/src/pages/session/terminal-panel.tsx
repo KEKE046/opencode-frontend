@@ -187,7 +187,7 @@ export function TerminalPanel() {
     {/* Mobile backdrop */}
     <Show when={!isDesktop() && opened()}>
       <div
-        class="fixed inset-x-0 top-10 bottom-0 z-40"
+        class="absolute inset-0 z-40"
         onClick={close}
       />
     </Show>
@@ -206,7 +206,7 @@ export function TerminalPanel() {
         "transition-[height] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[height] motion-reduce:transition-none":
           isDesktop() && !size.active(),
         // Mobile: full-screen overlay when open, hidden when closed
-        "fixed inset-x-0 top-10 bottom-0 z-50": !isDesktop() && opened(),
+        "absolute inset-0 z-50": !isDesktop() && opened(),
         "hidden": !isDesktop() && !opened(),
       }}
       style={isDesktop() ? { height: opened() ? `${pane()}px` : "0px" } : undefined}
