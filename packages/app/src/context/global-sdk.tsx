@@ -112,11 +112,17 @@ export const { use: useGlobalSDK, provider: GlobalSDKProvider } = createSimpleCo
     const HEARTBEAT_TIMEOUT_MS = 15_000
     let lastEventAt = Date.now()
     let heartbeat: ReturnType<typeof setTimeout> | undefined
+    let downCallbacks = new Set<() => void>()
+    const onDown = (cb: () => void) => {
+      downCallbacks.add(cb)
+      return () => downCallbacks.delete(cb)
+    }
     const resetHeartbeat = () => {
       lastEventAt = Date.now()
       if (heartbeat) clearTimeout(heartbeat)
       heartbeat = setTimeout(() => {
         attempt?.abort()
+        for (const cb of downCallbacks) cb()
       }, HEARTBEAT_TIMEOUT_MS)
     }
     const clearHeartbeat = () => {
@@ -237,6 +243,7 @@ export const { use: useGlobalSDK, provider: GlobalSDKProvider } = createSimpleCo
         on: emitter.on.bind(emitter),
         listen: emitter.listen.bind(emitter),
         start,
+        onDown,
       },
       createClient(opts: Omit<Parameters<typeof createSdkForServer>[0], "server" | "fetch">) {
         const s = server.current

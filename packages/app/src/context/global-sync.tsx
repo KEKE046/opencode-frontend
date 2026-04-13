@@ -12,6 +12,7 @@ import { getFilename } from "@opencode-ai/util/path"
 import { createContext, getOwner, onCleanup, onMount, type ParentProps, untrack, useContext } from "solid-js"
 import { createStore, produce, reconcile } from "solid-js/store"
 import { useLanguage } from "@/context/language"
+import { useServer } from "@/context/server"
 import { Persist, persisted } from "@/utils/persist"
 import type { InitError } from "../pages/error"
 import { useGlobalSDK } from "./global-sdk"
@@ -43,6 +44,7 @@ type GlobalStore = {
 
 function createGlobalSync() {
   const globalSDK = useGlobalSDK()
+  const server = useServer()
   const language = useLanguage()
   const owner = getOwner()
   if (!owner) throw new Error("GlobalSync must be created within owner")
@@ -53,14 +55,32 @@ function createGlobalSync() {
   const sessionMeta = new Map<string, { limit: number }>()
 
   const [projectCache, setProjectCache, projectInit] = persisted(
-    Persist.global("globalSync.project", ["globalSync.project.v1"]),
-    createStore({ value: [] as Project[] }),
+    {
+      ...Persist.global("globalSync.project", ["globalSync.project.v1"]),
+      migrate: (v: unknown) => {
+        if (!v || typeof v !== "object") return v
+        const obj = v as { value?: unknown }
+        if (Array.isArray(obj.value)) return { value: { "": obj.value } }
+        return v
+      },
+    },
+    createStore({ value: {} as Record<string, Project[]> }),
   )
+
+  // Stable key: gatewayKey for gateway-mode connections (same across all clients
+  // hitting the same backend), server URL otherwise.
+  const serverKey = () => {
+    const conn = server.current
+    if (conn?.type === "http" && conn.gatewayKey) return conn.gatewayKey
+    return globalSDK.url
+  }
+
+  const cached = serverKey() ? (projectCache.value[serverKey()] ?? projectCache.value[""] ?? []) : []
 
   const [globalStore, setGlobalStore] = createStore<GlobalStore>({
     ready: false,
     path: { state: "", config: "", worktree: "", directory: "", home: "" },
-    project: projectCache.value,
+    project: cached,
     session_todo: {},
     provider: { all: [], connected: [], default: {} },
     provider_auth: {},
@@ -84,10 +104,14 @@ function createGlobalSync() {
   })
 
   const cacheProjects = () => {
-    setProjectCache(
-      "value",
-      untrack(() => globalStore.project.map(sanitizeProject)),
-    )
+    const key = serverKey()
+    if (!key) return
+    const projects = untrack(() => globalStore.project.map(sanitizeProject))
+    // Don't overwrite an existing cache entry with an empty list — the server
+    // may return [] because no instances are active yet, but we still want to
+    // show the previously-known project list on next load.
+    if (projects.length === 0 && (projectCache.value[key] ?? []).length > 0) return
+    setProjectCache("value", key, projects)
   }
 
   const setProjects = (next: Project[] | ((draft: Project[]) => void)) => {
@@ -121,7 +145,8 @@ function createGlobalSync() {
     void projectInit.then(() => {
       if (!active) return
       if (projectWritten) return
-      const cached = projectCache.value
+      const key = serverKey()
+      const cached = key ? (projectCache.value[key] ?? projectCache.value[""] ?? []) : []
       if (cached.length === 0) return
       setGlobalStore("project", cached)
     })
@@ -328,6 +353,25 @@ function createGlobalSync() {
   })
 
   onCleanup(unsub)
+
+  // When the SSE heartbeat times out (server went down), reset all busy/retry
+  // session statuses to idle so spinners and progress bars clear immediately.
+  onCleanup(
+    globalSDK.event.onDown(() => {
+      const idle = { type: "idle" } as const
+      for (const [, setStore] of Object.values(children.children)) {
+        setStore(
+          "session_status",
+          produce((draft) => {
+            for (const id of Object.keys(draft)) {
+              if (draft[id].type !== "idle") draft[id] = idle
+            }
+          }),
+        )
+      }
+    }),
+  )
+
   onCleanup(() => {
     queue.dispose()
   })

@@ -34,6 +34,14 @@ function isLocalHost(url: string) {
   if (host === "localhost" || host === "127.0.0.1") return "local"
 }
 
+// Stable key for a connection — uses gatewayKey when available so all clients
+// connecting through the same gateway share the same sidebar state.
+function stableKey(conn: ServerConnection.Any | undefined): string {
+  if (!conn) return ""
+  if (conn.type === "http" && conn.gatewayKey) return conn.gatewayKey
+  return projectsKey(ServerConnection.key(conn))
+}
+
 export namespace ServerConnection {
   type Base = { displayName?: string }
 
@@ -106,10 +114,19 @@ export const { use: useServer, provider: ServerProvider } = createSimpleContext(
   }) => {
     const checkServerHealth = useCheckServerHealth()
 
-    const [store, setStore, _, ready] = persisted(
+    // server list + credentials — NOT synced to gateway (contains credentials)
+    const [store, setStore, storeInit, ready] = persisted(
       Persist.global("server", ["server.v3"]),
       createStore({
         list: [] as StoredServer[],
+        lastActive: "" as string,
+      }),
+    )
+
+    // sidebar state — synced to gateway, keyed by stable server ID (gatewayKey or projectsKey)
+    const [sidebar, setSidebar] = persisted(
+      Persist.global("sidebar"),
+      createStore({
         projects: {} as Record<string, StoredProject[]>,
         lastProject: {} as Record<string, string>,
       }),
@@ -167,9 +184,18 @@ export const { use: useServer, provider: ServerProvider } = createSimpleContext(
     })
 
     const [state, setState] = createStore({
-      active: props.defaultServer,
+      active: (store.lastActive || props.defaultServer) as ServerConnection.Key,
       healthy: undefined as boolean | undefined,
     })
+
+    // Desktop: persisted() is async — hydrate lastActive once store is ready
+    if (storeInit instanceof Promise) {
+      void storeInit.then(() => {
+        if (store.lastActive && state.active === props.defaultServer) {
+          setState("active", store.lastActive as ServerConnection.Key)
+        }
+      })
+    }
 
     const healthy = () => state.healthy
 
@@ -199,7 +225,9 @@ export const { use: useServer, provider: ServerProvider } = createSimpleContext(
     }
 
     function setActive(input: ServerConnection.Key) {
-      if (state.active !== input) setState("active", input)
+      if (state.active === input) return
+      setState("active", input)
+      setStore("lastActive", input)
     }
 
     function add(input: ServerConnection.Http) {
@@ -248,11 +276,11 @@ export const { use: useServer, provider: ServerProvider } = createSimpleContext(
       onCleanup(startHealthPolling(current_))
     })
 
-    const origin = createMemo(() => projectsKey(state.active))
-    const projectsList = createMemo(() => store.projects[origin()] ?? [])
     const current: Accessor<ServerConnection.Any | undefined> = createMemo(
       () => allServers().find((s) => ServerConnection.key(s) === state.active) ?? allServers()[0],
     )
+    const origin = createMemo(() => stableKey(current()))
+    const projectsList = createMemo(() => sidebar.projects[origin()] ?? [])
     const isLocal = createMemo(() => {
       const c = current()
       return (c?.type === "sidecar" && c.variant === "base") || (c?.type === "http" && isLocalHost(c.http.url))
@@ -283,54 +311,50 @@ export const { use: useServer, provider: ServerProvider } = createSimpleContext(
         open(directory: string) {
           const key = origin()
           if (!key) return
-          const current = store.projects[key] ?? []
-          if (current.find((x) => x.worktree === directory)) return
-          setStore("projects", key, [{ worktree: directory, expanded: true }, ...current])
+          const list = sidebar.projects[key] ?? []
+          if (list.find((x) => x.worktree === directory)) return
+          setSidebar("projects", key, [{ worktree: directory, expanded: true }, ...list])
         },
         close(directory: string) {
           const key = origin()
           if (!key) return
-          const current = store.projects[key] ?? []
-          setStore(
-            "projects",
-            key,
-            current.filter((x) => x.worktree !== directory),
-          )
+          const list = sidebar.projects[key] ?? []
+          setSidebar("projects", key, list.filter((x) => x.worktree !== directory))
         },
         expand(directory: string) {
           const key = origin()
           if (!key) return
-          const current = store.projects[key] ?? []
-          const index = current.findIndex((x) => x.worktree === directory)
-          if (index !== -1) setStore("projects", key, index, "expanded", true)
+          const list = sidebar.projects[key] ?? []
+          const index = list.findIndex((x) => x.worktree === directory)
+          if (index !== -1) setSidebar("projects", key, index, "expanded", true)
         },
         collapse(directory: string) {
           const key = origin()
           if (!key) return
-          const current = store.projects[key] ?? []
-          const index = current.findIndex((x) => x.worktree === directory)
-          if (index !== -1) setStore("projects", key, index, "expanded", false)
+          const list = sidebar.projects[key] ?? []
+          const index = list.findIndex((x) => x.worktree === directory)
+          if (index !== -1) setSidebar("projects", key, index, "expanded", false)
         },
         move(directory: string, toIndex: number) {
           const key = origin()
           if (!key) return
-          const current = store.projects[key] ?? []
-          const fromIndex = current.findIndex((x) => x.worktree === directory)
+          const list = sidebar.projects[key] ?? []
+          const fromIndex = list.findIndex((x) => x.worktree === directory)
           if (fromIndex === -1 || fromIndex === toIndex) return
-          const result = [...current]
+          const result = [...list]
           const [item] = result.splice(fromIndex, 1)
           result.splice(toIndex, 0, item)
-          setStore("projects", key, result)
+          setSidebar("projects", key, result)
         },
         last() {
           const key = origin()
           if (!key) return
-          return store.lastProject[key]
+          return sidebar.lastProject[key]
         },
         touch(directory: string) {
           const key = origin()
           if (!key) return
-          setStore("lastProject", key, directory)
+          setSidebar("lastProject", key, directory)
         },
       },
     }
