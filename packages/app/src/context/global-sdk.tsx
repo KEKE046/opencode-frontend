@@ -35,70 +35,9 @@ export const { use: useGlobalSDK, provider: GlobalSDKProvider } = createSimpleCo
     const currentServer = server.current
     if (!currentServer) throw new Error(language.t("error.globalSDK.noServerAvailable"))
 
-    // Decompress a base64url-encoded gzip payload → original string.
-    const gunzipB64 = async (b64: string): Promise<string> => {
-      const bin = Uint8Array.from(atob(b64.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0))
-      const ds = new DecompressionStream("gzip")
-      const w = ds.writable.getWriter()
-      const r = ds.readable.getReader()
-      await w.write(bin)
-      await w.close()
-      const chunks: Uint8Array[] = []
-      for (;;) {
-        const { done, value } = await r.read()
-        if (done) break
-        chunks.push(value)
-      }
-      let len = 0; for (const c of chunks) len += c.length
-      const buf2 = new Uint8Array(len)
-      let off = 0; for (const c of chunks) { buf2.set(c, off); off += c.length }
-      return new TextDecoder().decode(buf2)
-    }
-
-    // When the gateway compresses each SSE event's data field (X-SSE-Encoding: gzip),
-    // wrap fetch to decompress base64url-gzip data lines before the SSE parser sees them.
-    const sseDecompressFetch = async (input: Parameters<typeof fetch>[0], init: Parameters<typeof fetch>[1]) => {
-      const res = await (eventFetch ?? fetch)(input as Request, init as RequestInit)
-      if (res.headers.get("x-sse-encoding") !== "gzip" || !res.body) return res
-      const enc = new TextEncoder()
-      let tail = ""
-      const body = new ReadableStream<Uint8Array>({
-        async start(ctrl) {
-          const reader = res.body!.pipeThrough(new TextDecoderStream()).getReader()
-          try {
-            for (;;) {
-              const { done, value } = await reader.read()
-              if (done) {
-                if (tail.trim()) ctrl.enqueue(enc.encode(tail))
-                ctrl.close()
-                return
-              }
-              tail += value
-              const events = tail.split("\n\n")
-              tail = events.pop() ?? ""
-              for (const evt of events) {
-                const out: string[] = []
-                for (const line of evt.split("\n")) {
-                  if (line.startsWith("data:")) {
-                    out.push(`data:${await gunzipB64(line.slice(5).trimStart())}`)
-                  } else {
-                    out.push(line)
-                  }
-                }
-                ctrl.enqueue(enc.encode(out.join("\n") + "\n\n"))
-              }
-            }
-          } catch (e) {
-            ctrl.error(e)
-          }
-        },
-      })
-      return new Response(body, { status: res.status, statusText: res.statusText, headers: res.headers })
-    }
-
     const eventSdk = createSdkForServer({
       signal: abort.signal,
-      fetch: sseDecompressFetch as typeof fetch,
+      fetch: eventFetch,
       server: currentServer.http,
       gatewayKey: currentServer.type === "http" ? currentServer.gatewayKey : undefined,
     })

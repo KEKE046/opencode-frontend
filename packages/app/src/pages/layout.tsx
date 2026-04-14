@@ -678,10 +678,10 @@ export default function Layout(props: ParentProps) {
     running: number
   }
 
-  const prefetchChunk = 15
-  const prefetchConcurrency = 2
-  const prefetchPendingLimit = 4
-  const span = 1
+  const prefetchChunk = 5
+  const prefetchConcurrency = 1
+  const prefetchPendingLimit = 2
+  const span = 0
   const prefetchToken = { value: 0 }
   const prefetchQueues = new Map<string, PrefetchQueue>()
 

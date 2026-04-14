@@ -128,54 +128,18 @@ async function html(file: string) {
   return { body, csp }
 }
 
-// --- SSE per-event gzip ---
-// Each SSE event's data field is gzip-compressed and base64url-encoded so the
-// client can decompress without waiting for the full stream to flush.
-// The gateway adds `X-SSE-Encoding: gzip` so the client can detect this mode.
+// --- proxy response TTL cache ---
+// Large rarely-changing GET responses (provider list, global config) are cached
+// in memory for TTL ms. The ETag is an MD5 of the body for client-side 304 support.
 
-function transformSseStream(upstream: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
-  const enc = new TextEncoder()
-  const dec = new TextDecoder()
-  let buf = ""
+const CACHE_TTL_MS = 30_000
+type CacheEntry = { body: string; etag: string; at: number; ct: string }
+const proxyCache = new Map<string, CacheEntry>()
 
-  return new ReadableStream<Uint8Array>({
-    async start(ctrl) {
-      const reader = upstream.getReader()
-      try {
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) {
-            // flush any remaining buffer
-            if (buf.trim()) ctrl.enqueue(enc.encode(buf))
-            ctrl.close()
-            return
-          }
-          buf += dec.decode(value, { stream: true })
-          // SSE events are delimited by double newlines
-          const parts = buf.split("\n\n")
-          buf = parts.pop() ?? ""
-          for (const part of parts) {
-            const lines = part.split("\n")
-            const out: string[] = []
-            for (const line of lines) {
-              if (line.startsWith("data:")) {
-                const raw = line.slice(5).trimStart()
-                // compress and base64url-encode the data field
-                const compressed = Bun.gzipSync(enc.encode(raw))
-                const b64 = Buffer.from(compressed).toString("base64url")
-                out.push(`data:${b64}`)
-              } else {
-                out.push(line)
-              }
-            }
-            ctrl.enqueue(enc.encode(out.join("\n") + "\n\n"))
-          }
-        }
-      } catch (e) {
-        ctrl.error(e)
-      }
-    },
-  })
+const CACHED_PATHS = new Set(["/provider", "/global/config"])
+
+function proxyKey(serverKey: string, path: string) {
+  return `${serverKey}:${path}`
 }
 
 // --- session single-GET field stripping (plan B) ---
@@ -322,6 +286,20 @@ const app = new Hono()
     const isSse = targetPath.endsWith("/event") || targetPath.endsWith("/sync-event")
     // Plan B: strip large fields from single-session GET response
     const isSessionSingle = c.req.method === "GET" && SESSION_SINGLE_RE.test(targetPath)
+    // TTL cache for large rarely-changing responses (/provider, /global/config)
+    const isCacheable = c.req.method === "GET" && CACHED_PATHS.has(targetPath)
+
+    // Serve from cache if fresh (ETag 304 support included)
+    if (isCacheable) {
+      const ckey = proxyKey(key, targetPath)
+      const cached = proxyCache.get(ckey)
+      if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
+        if (c.req.header("if-none-match") === cached.etag) return c.body(null, 304)
+        c.header("ETag", cached.etag)
+        c.header("Content-Type", cached.ct)
+        return c.body(cached.body)
+      }
+    }
 
     const hopByHop = new Set(["host", "connection", "keep-alive", "transfer-encoding"])
     if (isSse) hopByHop.add("accept-encoding")
@@ -347,20 +325,22 @@ const app = new Hono()
         responseHeaders.set(name, value)
       }
 
+      // Store in TTL cache
+      if (isCacheable && res.ok) {
+        const body = await res.text()
+        const etag = `"${createHash("md5").update(body).digest("hex")}"`
+        const ct = res.headers.get("content-type") ?? "application/json"
+        proxyCache.set(proxyKey(key, targetPath), { body, etag, at: Date.now(), ct })
+        if (c.req.header("if-none-match") === etag) return c.body(null, 304)
+        c.header("ETag", etag)
+        c.header("Content-Type", ct)
+        return c.body(body)
+      }
+
       // Plan B: strip summary.diffs / revert.snapshot / revert.diff
       if (isSessionSingle && res.ok) {
         const json = await res.json()
         return new Response(JSON.stringify(stripSessionInfo(json)), {
-          status: res.status,
-          statusText: res.statusText,
-          headers: responseHeaders,
-        })
-      }
-
-      // Plan C: per-event gzip for SSE streams
-      if (isSse && res.ok && res.body) {
-        responseHeaders.set("X-SSE-Encoding", "gzip")
-        return new Response(transformSseStream(res.body), {
           status: res.status,
           statusText: res.statusText,
           headers: responseHeaders,
