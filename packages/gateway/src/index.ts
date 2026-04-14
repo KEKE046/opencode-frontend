@@ -139,25 +139,33 @@ function gzipSseStream(upstream: ReadableStream<Uint8Array>): ReadableStream<Uin
   const gz = zlib.createGzip({ level: 1, flush: zlib.constants.Z_SYNC_FLUSH })
   const ts = new TransformStream<Uint8Array, Uint8Array>()
   const writer = ts.writable.getWriter()
+  let done = false
+
+  const close = () => {
+    if (done) return
+    done = true
+    writer.close().catch(() => {})
+  }
 
   gz.on("data", (chunk: Buffer) => {
+    if (done) return
     writer.write(new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength)).catch(() => {})
   })
-  gz.once("end", () => { writer.close().catch(() => {}) })
-  gz.once("error", () => { writer.close().catch(() => {}) })
+  gz.once("end", close)
+  gz.once("error", close)
 
   void (async () => {
     const reader = upstream.getReader()
     try {
       for (;;) {
-        const { done, value } = await reader.read()
-        if (done) { gz.end(); return }
+        const { value, done: eof } = await reader.read()
+        if (eof) { gz.end(); return }
         gz.write(Buffer.from(value))
         await new Promise<void>((res) => gz.flush(zlib.constants.Z_SYNC_FLUSH, () => res()))
       }
     } catch {
       try { gz.destroy() } catch {}
-      try { writer.close() } catch {}
+      close()
     }
   })()
 
