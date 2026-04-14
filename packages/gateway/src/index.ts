@@ -178,10 +178,6 @@ const CACHED_PATHS = new Map<string, number>([
   ["/command", 60_000],
 ])
 
-// Regex-path TTL cache entries (matched against full path + query)
-const SESSION_MESSAGE_RE = /^\/session\/[^/]+\/message$/
-const MESSAGE_CACHE_TTL = 10_000
-
 function proxyKey(serverKey: string, pathAndQuery: string) {
   return `${serverKey}:${pathAndQuery}`
 }
@@ -331,9 +327,7 @@ const app = new Hono()
     // Plan B: strip large fields from single-session GET response
     const isSessionSingle = c.req.method === "GET" && SESSION_SINGLE_RE.test(targetPath)
     // TTL cache: exact paths + session message list
-    const cacheTtl = c.req.method === "GET"
-      ? (CACHED_PATHS.get(targetPath) ?? (SESSION_MESSAGE_RE.test(targetPath) ? MESSAGE_CACHE_TTL : 0))
-      : 0
+    const cacheTtl = c.req.method === "GET" ? (CACHED_PATHS.get(targetPath) ?? 0) : 0
     const isCacheable = cacheTtl > 0
     // cache key includes query string for message pagination (limit, cursor)
     const cacheKey = proxyKey(key, targetPath + url.search)
