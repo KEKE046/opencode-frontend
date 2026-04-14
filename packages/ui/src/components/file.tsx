@@ -433,6 +433,9 @@ function createLineCallbacks(opts: {
   }
 
   return {
+    onLineSelectionStart: () => {
+      opts.viewer.bridge.signal()
+    },
     onLineSelected: (range: SelectedLineRange | null) => {
       const next = select(range)
       opts.viewer.lastSelection = next

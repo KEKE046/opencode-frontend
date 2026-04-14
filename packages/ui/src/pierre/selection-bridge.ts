@@ -119,6 +119,11 @@ export function createLineNumberSelectionBridge() {
       clear()
       return current
     },
+    // Called from onLineSelectionStart (fires on both mouse and touch pointer events)
+    // to set pending before mouseup/pointerup, enabling mobile comment support.
+    signal() {
+      pending = true
+    },
     consume(range: SelectedLineRange | null) {
       const result = pending && range != null
       pending = false
