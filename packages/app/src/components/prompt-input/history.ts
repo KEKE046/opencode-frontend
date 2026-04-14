@@ -3,7 +3,7 @@ import type { SelectedLineRange } from "@/context/file"
 
 const DEFAULT_PROMPT: Prompt = [{ type: "text", content: "", start: 0, end: 0 }]
 
-export const MAX_HISTORY = 100
+export const MAX_HISTORY = 10
 
 export type PromptHistoryComment = {
   id: string

@@ -5,6 +5,7 @@ import { parseArgs } from "node:util"
 import { createHash, randomBytes } from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
+import zlib from "node:zlib"
 
 // --- cli ---
 
@@ -128,6 +129,89 @@ async function html(file: string) {
   return { body, csp }
 }
 
+// --- SSE streaming gzip ---
+// Pipes the backend SSE body through node:zlib createGzip with Z_SYNC_FLUSH.
+// Each upstream chunk is flushed immediately so clients receive events without
+// delay. Content-Encoding: gzip is set so the browser decompresses transparently.
+// All errors are swallowed to prevent process-level crashes.
+
+function gzipSseStream(upstream: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+  const gz = zlib.createGzip({ level: 1, flush: zlib.constants.Z_SYNC_FLUSH })
+  const ts = new TransformStream<Uint8Array, Uint8Array>()
+  const writer = ts.writable.getWriter()
+  let done = false
+
+  const close = () => {
+    if (done) return
+    done = true
+    writer.close().catch(() => {})
+  }
+
+  gz.on("data", (chunk: Buffer) => {
+    if (done) return
+    writer.write(new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength)).catch(() => {})
+  })
+  gz.once("end", close)
+  gz.once("error", close)
+
+  void (async () => {
+    const reader = upstream.getReader()
+    try {
+      for (;;) {
+        const { value, done: eof } = await reader.read()
+        if (eof) { gz.end(); return }
+        gz.write(Buffer.from(value))
+        await new Promise<void>((res) => gz.flush(zlib.constants.Z_SYNC_FLUSH, () => res()))
+      }
+    } catch {
+      try { gz.destroy() } catch {}
+      close()
+    }
+  })()
+
+  return ts.readable
+}
+
+// --- proxy response TTL cache ---
+// Large rarely-changing GET responses (provider list, global config) are cached
+// in memory for TTL ms. The ETag is an MD5 of the body for client-side 304 support.
+
+type CacheEntry = { body: string; etag: string; at: number; ct: string; ttl: number; cursor?: string }
+const proxyCache = new Map<string, CacheEntry>()
+
+// Exact-path TTL cache entries (no query string)
+const CACHED_PATHS = new Map<string, number>([
+  ["/provider", 30_000],
+  ["/global/config", 30_000],
+  ["/command", 60_000],
+])
+
+function proxyKey(serverKey: string, pathAndQuery: string) {
+  return `${serverKey}:${pathAndQuery}`
+}
+
+// --- session single-GET field stripping (plan B) ---
+// GET /session/:id (no trailing path, no query except directory/workspace)
+// Returns full Session.Info including summary.diffs, revert.snapshot, revert.diff.
+// Strip those large fields before forwarding to the client.
+
+const SESSION_SINGLE_RE = /^\/session\/[^/]+$/
+
+function stripSessionInfo(body: unknown): unknown {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return body
+  const s = body as Record<string, unknown>
+  const out: Record<string, unknown> = { ...s }
+  if (out.summary && typeof out.summary === "object") {
+    const { diffs: _, ...rest } = out.summary as Record<string, unknown>
+    out.summary = rest
+  }
+  if (out.revert && typeof out.revert === "object") {
+    const { snapshot: _s, diff: _d, ...rest } = out.revert as Record<string, unknown>
+    out.revert = rest
+  }
+  return out
+}
+
 // --- app ---
 
 const app = new Hono()
@@ -248,6 +332,26 @@ const app = new Hono()
     const targetUrl = server.url + targetPath + url.search
     
     const isSse = targetPath.endsWith("/event") || targetPath.endsWith("/sync-event")
+    // Plan B: strip large fields from single-session GET response
+    const isSessionSingle = c.req.method === "GET" && SESSION_SINGLE_RE.test(targetPath)
+    // TTL cache: exact paths + session message list
+    const cacheTtl = c.req.method === "GET" ? (CACHED_PATHS.get(targetPath) ?? 0) : 0
+    const isCacheable = cacheTtl > 0
+    // cache key includes query string for message pagination (limit, cursor)
+    const cacheKey = proxyKey(key, targetPath + url.search)
+
+    // Serve from cache if fresh (ETag 304 support included)
+    if (isCacheable) {
+      const cached = proxyCache.get(cacheKey)
+      if (cached && Date.now() - cached.at < cached.ttl) {
+        if (c.req.header("if-none-match") === cached.etag) return c.body(null, 304)
+        c.header("ETag", cached.etag)
+        c.header("Content-Type", cached.ct)
+        if (cached.cursor) c.header("X-Next-Cursor", cached.cursor)
+        return c.body(cached.body)
+      }
+    }
+
     const hopByHop = new Set(["host", "connection", "keep-alive", "transfer-encoding"])
     if (isSse) hopByHop.add("accept-encoding")
     const headers = new Headers()
@@ -271,7 +375,40 @@ const app = new Hono()
         if (["connection", "keep-alive", "transfer-encoding", "content-encoding", "content-length"].includes(name.toLowerCase())) continue
         responseHeaders.set(name, value)
       }
-      
+
+      // Store in TTL cache
+      if (isCacheable && res.ok) {
+        const body = await res.text()
+        const etag = `"${createHash("md5").update(body).digest("hex")}"`
+        const ct = res.headers.get("content-type") ?? "application/json"
+        proxyCache.set(cacheKey, { body, etag, at: Date.now(), ct, ttl: cacheTtl })
+        if (c.req.header("if-none-match") === etag) return c.body(null, 304)
+        c.header("ETag", etag)
+        c.header("Content-Type", ct)
+        return c.body(body)
+      }
+
+      // Plan B: strip summary.diffs / revert.snapshot / revert.diff
+      if (isSessionSingle && res.ok) {
+        const json = await res.json()
+        return new Response(JSON.stringify(stripSessionInfo(json)), {
+          status: res.status,
+          statusText: res.statusText,
+          headers: responseHeaders,
+        })
+      }
+
+      if (isSse && res.ok && res.body) {
+        responseHeaders.set("Content-Encoding", "gzip")
+        const cc = responseHeaders.get("Cache-Control") ?? ""
+        responseHeaders.set("Cache-Control", cc.replace(/,?\s*no-transform/gi, "").trim() || "no-cache")
+        return new Response(gzipSseStream(res.body), {
+          status: res.status,
+          statusText: res.statusText,
+          headers: responseHeaders,
+        })
+      }
+
       return new Response(res.body, {
         status: res.status,
         statusText: res.statusText,
