@@ -168,7 +168,7 @@ function gzipSseStream(upstream: ReadableStream<Uint8Array>): ReadableStream<Uin
 // Large rarely-changing GET responses (provider list, global config) are cached
 // in memory for TTL ms. The ETag is an MD5 of the body for client-side 304 support.
 
-type CacheEntry = { body: string; etag: string; at: number; ct: string; ttl: number }
+type CacheEntry = { body: string; etag: string; at: number; ct: string; ttl: number; cursor?: string }
 const proxyCache = new Map<string, CacheEntry>()
 
 // Exact-path TTL cache entries (no query string)
@@ -345,6 +345,7 @@ const app = new Hono()
         if (c.req.header("if-none-match") === cached.etag) return c.body(null, 304)
         c.header("ETag", cached.etag)
         c.header("Content-Type", cached.ct)
+        if (cached.cursor) c.header("X-Next-Cursor", cached.cursor)
         return c.body(cached.body)
       }
     }
