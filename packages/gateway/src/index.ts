@@ -5,6 +5,7 @@ import { parseArgs } from "node:util"
 import { createHash, randomBytes } from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
+import zlib from "node:zlib"
 
 // --- cli ---
 
@@ -126,6 +127,41 @@ async function html(file: string) {
   const hash = script ? createHash("sha256").update(script[2]).digest("base64") : ""
   const csp = `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'${hash ? ` 'sha256-${hash}'` : ""}; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; media-src 'self' data:; connect-src * data: blob:`
   return { body, csp }
+}
+
+// --- SSE streaming gzip ---
+// Pipes the backend SSE body through node:zlib createGzip with Z_SYNC_FLUSH.
+// Each upstream chunk is flushed immediately so clients receive events without
+// delay. Content-Encoding: gzip is set so the browser decompresses transparently.
+// All errors are swallowed to prevent process-level crashes.
+
+function gzipSseStream(upstream: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+  const gz = zlib.createGzip({ level: 1, flush: zlib.constants.Z_SYNC_FLUSH })
+  const ts = new TransformStream<Uint8Array, Uint8Array>()
+  const writer = ts.writable.getWriter()
+
+  gz.on("data", (chunk: Buffer) => {
+    writer.write(new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength)).catch(() => {})
+  })
+  gz.once("end", () => { writer.close().catch(() => {}) })
+  gz.once("error", () => { writer.close().catch(() => {}) })
+
+  void (async () => {
+    const reader = upstream.getReader()
+    try {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) { gz.end(); return }
+        gz.write(Buffer.from(value))
+        await new Promise<void>((res) => gz.flush(zlib.constants.Z_SYNC_FLUSH, () => res()))
+      }
+    } catch {
+      try { gz.destroy() } catch {}
+      try { writer.close() } catch {}
+    }
+  })()
+
+  return ts.readable
 }
 
 // --- proxy response TTL cache ---
@@ -353,6 +389,17 @@ const app = new Hono()
       if (isSessionSingle && res.ok) {
         const json = await res.json()
         return new Response(JSON.stringify(stripSessionInfo(json)), {
+          status: res.status,
+          statusText: res.statusText,
+          headers: responseHeaders,
+        })
+      }
+
+      if (isSse && res.ok && res.body) {
+        responseHeaders.set("Content-Encoding", "gzip")
+        const cc = responseHeaders.get("Cache-Control") ?? ""
+        responseHeaders.set("Cache-Control", cc.replace(/,?\s*no-transform/gi, "").trim() || "no-cache")
+        return new Response(gzipSseStream(res.body), {
           status: res.status,
           statusText: res.statusText,
           headers: responseHeaders,
