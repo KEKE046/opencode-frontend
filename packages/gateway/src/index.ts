@@ -5,6 +5,7 @@ import { parseArgs } from "node:util"
 import { createHash, randomBytes } from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
+import zlib from "node:zlib"
 
 // --- cli ---
 
@@ -126,6 +127,41 @@ async function html(file: string) {
   const hash = script ? createHash("sha256").update(script[2]).digest("base64") : ""
   const csp = `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'${hash ? ` 'sha256-${hash}'` : ""}; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; media-src 'self' data:; connect-src * data: blob:`
   return { body, csp }
+}
+
+// --- SSE gzip stream ---
+// Wraps a backend SSE ReadableStream with node:zlib gzip + Z_SYNC_FLUSH so each
+// event is flushed immediately. The gateway sets Content-Encoding: gzip and the
+// browser decompresses transparently — no client changes required.
+
+function gzipSseStream(upstream: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+  const gz = zlib.createGzip({ level: 1, flush: zlib.constants.Z_SYNC_FLUSH })
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>()
+  const writer = writable.getWriter()
+
+  gz.on("data", (chunk: Buffer) => {
+    writer.write(new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength))
+  })
+  gz.on("end", () => writer.close())
+  gz.on("error", (e) => writer.abort(e))
+
+  ;(async () => {
+    const reader = upstream.getReader()
+    try {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) { gz.end(); break }
+        gz.write(Buffer.from(value))
+        // Z_SYNC_FLUSH: flush after each upstream chunk so events reach the client immediately
+        await new Promise<void>((res, rej) => gz.flush(zlib.constants.Z_SYNC_FLUSH, (e) => e ? rej(e) : res()))
+      }
+    } catch (e) {
+      gz.destroy(e as Error)
+      writer.abort(e)
+    }
+  })()
+
+  return readable
 }
 
 // --- proxy response TTL cache ---
@@ -341,6 +377,19 @@ const app = new Hono()
       if (isSessionSingle && res.ok) {
         const json = await res.json()
         return new Response(JSON.stringify(stripSessionInfo(json)), {
+          status: res.status,
+          statusText: res.statusText,
+          headers: responseHeaders,
+        })
+      }
+
+      // SSE gzip: compress the event stream so the browser decompresses transparently.
+      // no-transform is removed so the browser accepts Content-Encoding: gzip.
+      if (isSse && res.ok && res.body) {
+        responseHeaders.set("Content-Encoding", "gzip")
+        const cc = responseHeaders.get("Cache-Control") ?? ""
+        responseHeaders.set("Cache-Control", cc.replace(/,?\s*no-transform/gi, "").trim() || "no-cache")
+        return new Response(gzipSseStream(res.body), {
           status: res.status,
           statusText: res.statusText,
           headers: responseHeaders,
