@@ -1073,7 +1073,6 @@ export default function Page() {
   createEffect(() => {
     const mode = vcsMode()
     if (!mode) return
-    if (!wantsReview()) return
     void loadVcs(mode)
   })
 
@@ -1361,13 +1360,12 @@ export default function Page() {
 
   createEffect(
     on(
-      () => [sessionKey(), wantsReview()] as const,
-      ([key, wants]) => {
+      sessionKey,
+      (key) => {
         if (diffFrame !== undefined) cancelAnimationFrame(diffFrame)
         if (diffTimer !== undefined) window.clearTimeout(diffTimer)
         diffFrame = undefined
         diffTimer = undefined
-        if (!wants) return
 
         const id = params.id
         if (!id) return
