@@ -168,14 +168,22 @@ function gzipSseStream(upstream: ReadableStream<Uint8Array>): ReadableStream<Uin
 // Large rarely-changing GET responses (provider list, global config) are cached
 // in memory for TTL ms. The ETag is an MD5 of the body for client-side 304 support.
 
-const CACHE_TTL_MS = 30_000
-type CacheEntry = { body: string; etag: string; at: number; ct: string }
+type CacheEntry = { body: string; etag: string; at: number; ct: string; ttl: number }
 const proxyCache = new Map<string, CacheEntry>()
 
-const CACHED_PATHS = new Set(["/provider", "/global/config"])
+// Exact-path TTL cache entries (no query string)
+const CACHED_PATHS = new Map<string, number>([
+  ["/provider", 30_000],
+  ["/global/config", 30_000],
+  ["/command", 60_000],
+])
 
-function proxyKey(serverKey: string, path: string) {
-  return `${serverKey}:${path}`
+// Regex-path TTL cache entries (matched against full path + query)
+const SESSION_MESSAGE_RE = /^\/session\/[^/]+\/message$/
+const MESSAGE_CACHE_TTL = 10_000
+
+function proxyKey(serverKey: string, pathAndQuery: string) {
+  return `${serverKey}:${pathAndQuery}`
 }
 
 // --- session single-GET field stripping (plan B) ---
@@ -322,14 +330,18 @@ const app = new Hono()
     const isSse = targetPath.endsWith("/event") || targetPath.endsWith("/sync-event")
     // Plan B: strip large fields from single-session GET response
     const isSessionSingle = c.req.method === "GET" && SESSION_SINGLE_RE.test(targetPath)
-    // TTL cache for large rarely-changing responses (/provider, /global/config)
-    const isCacheable = c.req.method === "GET" && CACHED_PATHS.has(targetPath)
+    // TTL cache: exact paths + session message list
+    const cacheTtl = c.req.method === "GET"
+      ? (CACHED_PATHS.get(targetPath) ?? (SESSION_MESSAGE_RE.test(targetPath) ? MESSAGE_CACHE_TTL : 0))
+      : 0
+    const isCacheable = cacheTtl > 0
+    // cache key includes query string for message pagination (limit, cursor)
+    const cacheKey = proxyKey(key, targetPath + url.search)
 
     // Serve from cache if fresh (ETag 304 support included)
     if (isCacheable) {
-      const ckey = proxyKey(key, targetPath)
-      const cached = proxyCache.get(ckey)
-      if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
+      const cached = proxyCache.get(cacheKey)
+      if (cached && Date.now() - cached.at < cached.ttl) {
         if (c.req.header("if-none-match") === cached.etag) return c.body(null, 304)
         c.header("ETag", cached.etag)
         c.header("Content-Type", cached.ct)
@@ -366,7 +378,7 @@ const app = new Hono()
         const body = await res.text()
         const etag = `"${createHash("md5").update(body).digest("hex")}"`
         const ct = res.headers.get("content-type") ?? "application/json"
-        proxyCache.set(proxyKey(key, targetPath), { body, etag, at: Date.now(), ct })
+        proxyCache.set(cacheKey, { body, etag, at: Date.now(), ct, ttl: cacheTtl })
         if (c.req.header("if-none-match") === etag) return c.body(null, 304)
         c.header("ETag", etag)
         c.header("Content-Type", ct)
