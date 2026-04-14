@@ -1,3 +1,4 @@
+import { Portal } from "solid-js/web"
 import type { Project, UserMessage, VcsFileDiff } from "@opencode-ai/sdk/v2"
 import { useDialog } from "@opencode-ai/ui/context/dialog"
 import { useMutation } from "@tanstack/solid-query"
@@ -22,7 +23,6 @@ import { selectionFromLines, useFile, type FileSelection, type SelectedLineRange
 import { createStore } from "solid-js/store"
 import { ResizeHandle } from "@opencode-ai/ui/resize-handle"
 import { Select } from "@opencode-ai/ui/select"
-import { Tabs } from "@opencode-ai/ui/tabs"
 import { createAutoScroll } from "@opencode-ai/ui/hooks"
 import { previewSelectedLines } from "@opencode-ai/ui/pierre/selection-bridge"
 import { Button } from "@opencode-ai/ui/button"
@@ -1054,6 +1054,7 @@ export default function Page() {
     }
   }
 
+  const centerMount = createMemo(() => document.getElementById("opencode-titlebar-center"))
   const mobileChanges = createMemo(() => !isDesktop() && store.mobileTab === "changes")
   const wantsReview = createMemo(() =>
     isDesktop()
@@ -1886,31 +1887,39 @@ export default function Page() {
   return (
     <div class="relative bg-background-base size-full overflow-hidden flex flex-col">
       <SessionHeader />
-      <div class="flex-1 min-h-0 flex flex-col md:flex-row">
-        <Show when={!isDesktop() && !!params.id}>
-          <Tabs value={store.mobileTab} class="h-auto">
-            <Tabs.List>
-              <Tabs.Trigger
-                value="session"
-                class="!w-1/2 !max-w-none"
-                classes={{ button: "w-full" }}
+      <Show when={centerMount()}>
+        {(mount) => (
+          <Portal mount={mount()}>
+            <div classList={{ "flex md:hidden items-center h-7 rounded-lg bg-surface-base p-0.5 gap-px": true, "invisible": !params.id }}>
+              <button
+                type="button"
+                classList={{
+                  "px-3 h-full text-12-medium rounded-md transition-colors": true,
+                  "bg-background-base text-text-strong shadow-sm": store.mobileTab === "session",
+                  "text-text-weak": store.mobileTab !== "session",
+                }}
                 onClick={() => setStore("mobileTab", "session")}
               >
                 {language.t("session.tab.session")}
-              </Tabs.Trigger>
-              <Tabs.Trigger
-                value="changes"
-                class="!w-1/2 !max-w-none !border-r-0"
-                classes={{ button: "w-full" }}
+              </button>
+              <button
+                type="button"
+                classList={{
+                  "px-3 h-full text-12-medium rounded-md transition-colors": true,
+                  "bg-background-base text-text-strong shadow-sm": store.mobileTab === "changes",
+                  "text-text-weak": store.mobileTab !== "changes",
+                }}
                 onClick={() => setStore("mobileTab", "changes")}
               >
                 {hasReview()
                   ? language.t("session.review.filesChanged", { count: reviewCount() })
                   : language.t("session.review.change.other")}
-              </Tabs.Trigger>
-            </Tabs.List>
-          </Tabs>
-        </Show>
+              </button>
+            </div>
+          </Portal>
+        )}
+      </Show>
+      <div class="flex-1 min-h-0 flex flex-col md:flex-row">
 
         {/* Session panel */}
         <div
