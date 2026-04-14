@@ -657,12 +657,10 @@ export function SessionSidePanel(props: {
                       cacheKey: cache(),
                     }}
                     enableLineSelection
-                    enableHoverUtility
                     selectedLines={activeSelection()}
                     commentedLines={commentedLines()}
                     annotations={commentsUi.annotations()}
                     renderAnnotation={commentsUi.renderAnnotation}
-                    renderHoverUtility={commentsUi.renderHoverUtility}
                     onLineSelected={(range: SelectedLineRange | null) => {
                       commentsUi.onLineSelected(range)
                     }}
