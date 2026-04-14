@@ -48,7 +48,7 @@ type NotificationIndex = {
   }
 }
 
-const MAX_NOTIFICATIONS = 500
+const MAX_NOTIFICATIONS = 50
 const NOTIFICATION_TTL_MS = 1000 * 60 * 60 * 24 * 30
 
 function pruneNotifications(list: Notification[]) {
