@@ -129,168 +129,39 @@ async function html(file: string) {
   return { body, csp }
 }
 
-// --- patch context trimming ---
-// Unified diff patches in SSE events can be large (full context lines).
-// Trim each patch to keep only +/- lines plus N context lines around them.
-// Also rewrites the @@ hunk headers to match the trimmed content.
-
-const CONTEXT = 2 // lines of context to keep around each change
-
-function trimPatch(patch: string): string {
-  if (!patch) return patch
-  const lines = patch.split("\n")
-  const out: string[] = []
-  let i = 0
-  while (i < lines.length) {
-    const line = lines[i]
-    if (line.startsWith("@@")) {
-      // collect hunk body
-      i++
-      const body: string[] = []
-      while (i < lines.length && !lines[i].startsWith("@@")) {
-        body.push(lines[i])
-        i++
-      }
-      // mark which lines to keep: change lines + CONTEXT neighbours
-      const keep = new Array(body.length).fill(false)
-      for (let j = 0; j < body.length; j++) {
-        if (body[j].startsWith("+") || body[j].startsWith("-")) {
-          for (let k = Math.max(0, j - CONTEXT); k <= Math.min(body.length - 1, j + CONTEXT); k++) {
-            keep[k] = true
-          }
-        }
-      }
-      // build trimmed hunks with corrected @@ headers
-      let j = 0
-      while (j < body.length) {
-        if (!keep[j]) { j++; continue }
-        // start of a kept segment
-        const start = j
-        while (j < body.length && keep[j]) j++
-        const seg = body.slice(start, j)
-        // compute hunk header for this segment
-        // we don't track exact line numbers so use 0,0 as placeholder — renderers tolerate this
-        out.push(`@@ -0,0 +0,0 @@`)
-        out.push(...seg)
-      }
-    } else {
-      // file header lines (---, +++) or empty
-      out.push(line)
-      i++
-    }
-  }
-  return out.join("\n")
-}
-
-function trimDiffs(diffs: unknown): unknown {
-  if (!Array.isArray(diffs)) return diffs
-  return diffs.map((d) => {
-    if (!d || typeof d !== "object" || typeof (d as Record<string, unknown>).patch !== "string") return d
-    return { ...d, patch: trimPatch((d as Record<string, unknown>).patch as string) }
-  })
-}
-
-// Walk an SSE event JSON and trim patch fields in-place.
-function trimSseEvent(event: Record<string, unknown>): Record<string, unknown> {
-  const type = event.type as string | undefined
-  if (type === "session.updated") {
-    const props = event.properties as Record<string, unknown> | undefined
-    const info = props?.info as Record<string, unknown> | undefined
-    const summary = info?.summary as Record<string, unknown> | undefined
-    if (summary?.diffs) {
-      return {
-        ...event,
-        properties: { ...props, info: { ...info, summary: { ...summary, diffs: trimDiffs(summary.diffs) } } },
-      }
-    }
-  }
-  if (type === "session.diff") {
-    const props = event.properties as Record<string, unknown> | undefined
-    if (props?.diff) {
-      return { ...event, properties: { ...props, diff: trimDiffs(props.diff) } }
-    }
-  }
-  return event
-}
-
-// Transform a raw SSE ReadableStream: parse each data: line, trim patches, re-emit.
-function trimSsePatches(upstream: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
-  const enc = new TextEncoder()
-  const dec = new TextDecoder()
-  let buf = ""
-  return new ReadableStream<Uint8Array>({
-    async start(ctrl) {
-      const reader = upstream.getReader()
-      try {
-        for (;;) {
-          const { done, value } = await reader.read()
-          if (done) {
-            if (buf.trim()) ctrl.enqueue(enc.encode(buf))
-            ctrl.close()
-            return
-          }
-          buf += dec.decode(value, { stream: true })
-          const events = buf.split("\n\n")
-          buf = events.pop() ?? ""
-          for (const evt of events) {
-            const lines = evt.split("\n")
-            const out: string[] = []
-            for (const line of lines) {
-              if (line.startsWith("data:")) {
-                const raw = line.slice(5).trimStart()
-                try {
-                  const parsed = JSON.parse(raw) as Record<string, unknown>
-                  out.push(`data: ${JSON.stringify(trimSseEvent(parsed))}`)
-                } catch {
-                  out.push(line)
-                }
-              } else {
-                out.push(line)
-              }
-            }
-            ctrl.enqueue(enc.encode(out.join("\n") + "\n\n"))
-          }
-        }
-      } catch (e) {
-        ctrl.error(e)
-      }
-    },
-  })
-}
-
-// --- SSE gzip stream ---
-// Wraps a backend SSE ReadableStream with node:zlib gzip + Z_SYNC_FLUSH so each
-// event is flushed immediately. The gateway sets Content-Encoding: gzip and the
-// browser decompresses transparently — no client changes required.
+// --- SSE streaming gzip ---
+// Pipes the backend SSE body through node:zlib createGzip with Z_SYNC_FLUSH.
+// Each upstream chunk is flushed immediately so clients receive events without
+// delay. Content-Encoding: gzip is set so the browser decompresses transparently.
+// All errors are swallowed to prevent process-level crashes.
 
 function gzipSseStream(upstream: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
   const gz = zlib.createGzip({ level: 1, flush: zlib.constants.Z_SYNC_FLUSH })
-  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>()
-  const writer = writable.getWriter()
+  const ts = new TransformStream<Uint8Array, Uint8Array>()
+  const writer = ts.writable.getWriter()
 
   gz.on("data", (chunk: Buffer) => {
-    writer.write(new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength))
+    writer.write(new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength)).catch(() => {})
   })
-  gz.on("end", () => writer.close())
-  gz.on("error", (e) => writer.abort(e))
+  gz.once("end", () => { writer.close().catch(() => {}) })
+  gz.once("error", () => { writer.close().catch(() => {}) })
 
-  ;(async () => {
+  void (async () => {
     const reader = upstream.getReader()
     try {
       for (;;) {
         const { done, value } = await reader.read()
-        if (done) { gz.end(); break }
+        if (done) { gz.end(); return }
         gz.write(Buffer.from(value))
-        // Z_SYNC_FLUSH: flush after each upstream chunk so events reach the client immediately
-        await new Promise<void>((res, rej) => gz.flush(zlib.constants.Z_SYNC_FLUSH, (e) => e ? rej(e) : res()))
+        await new Promise<void>((res) => gz.flush(zlib.constants.Z_SYNC_FLUSH, () => res()))
       }
-    } catch (e) {
-      gz.destroy(e as Error)
-      writer.abort(e)
+    } catch {
+      try { gz.destroy() } catch {}
+      try { writer.close() } catch {}
     }
   })()
 
-  return readable
+  return ts.readable
 }
 
 // --- proxy response TTL cache ---
@@ -524,12 +395,11 @@ const app = new Hono()
         })
       }
 
-      // SSE: trim patch context then gzip. Browser decompresses transparently.
       if (isSse && res.ok && res.body) {
         responseHeaders.set("Content-Encoding", "gzip")
         const cc = responseHeaders.get("Cache-Control") ?? ""
         responseHeaders.set("Cache-Control", cc.replace(/,?\s*no-transform/gi, "").trim() || "no-cache")
-        return new Response(gzipSseStream(trimSsePatches(res.body)), {
+        return new Response(gzipSseStream(res.body), {
           status: res.status,
           statusText: res.statusText,
           headers: responseHeaders,

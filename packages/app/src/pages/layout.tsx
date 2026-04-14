@@ -87,6 +87,7 @@ import {
 } from "./layout/sidebar-workspace"
 import { ProjectDragOverlay, SortableProject, type ProjectSidebarContext } from "./layout/sidebar-project"
 import { SidebarContent } from "./layout/sidebar-shell"
+import { ServerRail } from "./layout/sidebar-server"
 
 export default function Layout(props: ParentProps) {
   const [store, setStore, , ready] = persisted(
@@ -2346,6 +2347,7 @@ export default function Layout(props: ParentProps) {
       openProjectKeybind={() => command.keybind("project.open")}
       onOpenProject={chooseProject}
       renderProjectOverlay={projectOverlay}
+      renderServers={() => <ServerRail mobile={mobile} />}
       settingsLabel={() => language.t("sidebar.settings")}
       settingsKeybind={() => command.keybind("settings.open")}
       onOpenSettings={openSettings}
