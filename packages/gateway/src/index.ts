@@ -178,6 +178,20 @@ function transformSseStream(upstream: ReadableStream<Uint8Array>): ReadableStrea
   })
 }
 
+// --- proxy response TTL cache ---
+// Large rarely-changing GET responses (provider list, global config) are cached
+// in memory for TTL ms. The ETag is an MD5 of the body for client-side 304 support.
+
+const CACHE_TTL_MS = 30_000
+type CacheEntry = { body: string; etag: string; at: number; ct: string }
+const proxyCache = new Map<string, CacheEntry>()
+
+const CACHED_PATHS = new Set(["/provider", "/global/config"])
+
+function proxyKey(serverKey: string, path: string) {
+  return `${serverKey}:${path}`
+}
+
 // --- session single-GET field stripping (plan B) ---
 // GET /session/:id (no trailing path, no query except directory/workspace)
 // Returns full Session.Info including summary.diffs, revert.snapshot, revert.diff.
@@ -322,6 +336,20 @@ const app = new Hono()
     const isSse = targetPath.endsWith("/event") || targetPath.endsWith("/sync-event")
     // Plan B: strip large fields from single-session GET response
     const isSessionSingle = c.req.method === "GET" && SESSION_SINGLE_RE.test(targetPath)
+    // TTL cache for large rarely-changing responses (/provider, /global/config)
+    const isCacheable = c.req.method === "GET" && CACHED_PATHS.has(targetPath)
+
+    // Serve from cache if fresh (ETag 304 support included)
+    if (isCacheable) {
+      const ckey = proxyKey(key, targetPath)
+      const cached = proxyCache.get(ckey)
+      if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
+        if (c.req.header("if-none-match") === cached.etag) return c.body(null, 304)
+        c.header("ETag", cached.etag)
+        c.header("Content-Type", cached.ct)
+        return c.body(cached.body)
+      }
+    }
 
     const hopByHop = new Set(["host", "connection", "keep-alive", "transfer-encoding"])
     if (isSse) hopByHop.add("accept-encoding")
@@ -345,6 +373,18 @@ const app = new Hono()
       for (const [name, value] of res.headers.entries()) {
         if (["connection", "keep-alive", "transfer-encoding", "content-encoding", "content-length"].includes(name.toLowerCase())) continue
         responseHeaders.set(name, value)
+      }
+
+      // Store in TTL cache
+      if (isCacheable && res.ok) {
+        const body = await res.text()
+        const etag = `"${createHash("md5").update(body).digest("hex")}"`
+        const ct = res.headers.get("content-type") ?? "application/json"
+        proxyCache.set(proxyKey(key, targetPath), { body, etag, at: Date.now(), ct })
+        if (c.req.header("if-none-match") === etag) return c.body(null, 304)
+        c.header("ETag", etag)
+        c.header("Content-Type", ct)
+        return c.body(body)
       }
 
       // Plan B: strip summary.diffs / revert.snapshot / revert.diff
