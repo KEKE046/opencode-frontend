@@ -128,56 +128,6 @@ async function html(file: string) {
   return { body, csp }
 }
 
-// --- SSE per-event gzip ---
-// Each SSE event's data field is gzip-compressed and base64url-encoded so the
-// client can decompress without waiting for the full stream to flush.
-// The gateway adds `X-SSE-Encoding: gzip` so the client can detect this mode.
-
-function transformSseStream(upstream: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
-  const enc = new TextEncoder()
-  const dec = new TextDecoder()
-  let buf = ""
-
-  return new ReadableStream<Uint8Array>({
-    async start(ctrl) {
-      const reader = upstream.getReader()
-      try {
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) {
-            // flush any remaining buffer
-            if (buf.trim()) ctrl.enqueue(enc.encode(buf))
-            ctrl.close()
-            return
-          }
-          buf += dec.decode(value, { stream: true })
-          // SSE events are delimited by double newlines
-          const parts = buf.split("\n\n")
-          buf = parts.pop() ?? ""
-          for (const part of parts) {
-            const lines = part.split("\n")
-            const out: string[] = []
-            for (const line of lines) {
-              if (line.startsWith("data:")) {
-                const raw = line.slice(5).trimStart()
-                // compress and base64url-encode the data field
-                const compressed = Bun.gzipSync(enc.encode(raw))
-                const b64 = Buffer.from(compressed).toString("base64url")
-                out.push(`data:${b64}`)
-              } else {
-                out.push(line)
-              }
-            }
-            ctrl.enqueue(enc.encode(out.join("\n") + "\n\n"))
-          }
-        }
-      } catch (e) {
-        ctrl.error(e)
-      }
-    },
-  })
-}
-
 // --- proxy response TTL cache ---
 // Large rarely-changing GET responses (provider list, global config) are cached
 // in memory for TTL ms. The ETag is an MD5 of the body for client-side 304 support.
@@ -391,16 +341,6 @@ const app = new Hono()
       if (isSessionSingle && res.ok) {
         const json = await res.json()
         return new Response(JSON.stringify(stripSessionInfo(json)), {
-          status: res.status,
-          statusText: res.statusText,
-          headers: responseHeaders,
-        })
-      }
-
-      // Plan C: per-event gzip for SSE streams
-      if (isSse && res.ok && res.body) {
-        responseHeaders.set("X-SSE-Encoding", "gzip")
-        return new Response(transformSseStream(res.body), {
           status: res.status,
           statusText: res.statusText,
           headers: responseHeaders,
