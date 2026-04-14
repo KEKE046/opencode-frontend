@@ -1050,7 +1050,7 @@ export default function Page() {
 
     if (event.key.length === 1 && event.key !== "Unidentified" && !(event.ctrlKey || event.metaKey)) {
       if (composer.blocked() || isChildSession()) return
-      inputRef?.focus()
+      if (isDesktop()) inputRef?.focus()
     }
   }
 
@@ -1861,7 +1861,7 @@ export default function Page() {
     on(
       () => params.id,
       (id) => {
-        if (!id) requestAnimationFrame(() => inputRef?.focus())
+        if (!id && isDesktop()) requestAnimationFrame(() => inputRef?.focus())
       },
     ),
   )
@@ -1994,6 +1994,7 @@ export default function Page() {
             onSubmit={() => {
               comments.clear()
               resumeScroll()
+              if (!isDesktop()) inputRef?.blur()
             }}
             onResponseSubmit={resumeScroll}
             followup={
