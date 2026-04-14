@@ -1,4 +1,4 @@
-import { createEffect, For, onCleanup, type JSX } from "solid-js"
+import { createEffect, For, onCleanup, Show, type JSX } from "solid-js"
 import { createStore, reconcile } from "solid-js/store"
 import { Tooltip } from "@opencode-ai/ui/tooltip"
 import { useNavigate } from "@solidjs/router"
@@ -76,9 +76,11 @@ export const ServerRail = (props: { mobile?: boolean }): JSX.Element => {
               >
                 {abbr}
               </div>
-              <div class="absolute top-px right-px">
-                <ServerHealthIndicator health={health[key]} />
-              </div>
+              <Show when={!props.mobile || health[key]?.healthy === false}>
+                <div class="absolute top-px right-px">
+                  <ServerHealthIndicator health={health[key]} />
+                </div>
+              </Show>
             </button>
           </Tooltip>
         )
