@@ -316,6 +316,7 @@ export default function Layout(props: ParentProps) {
     clearSidebarHoverState()
     navigate(href)
     layout.mobileSidebar.hide()
+    if (window.innerWidth < 768) (document.activeElement as HTMLElement | null)?.blur()
   }
 
   function cycleTheme(direction = 1) {
@@ -579,12 +580,11 @@ export default function Layout(props: ParentProps) {
   const [autoselecting] = createResource(async () => {
     await ready.promise
     await layout.ready.promise
-    const list = layout.projects.list()
-    const last = server.projects.last()
+    // untrack to prevent re-runs on server/project changes — autoselect runs once on initial load only
+    const list = untrack(() => layout.projects.list())
+    const last = untrack(() => server.projects.last())
 
-    // Skip autoselect only when the URL already points to a project that is
-    // open in the sidebar for THIS server. A stale dir from a previous server
-    // (after a server switch) must NOT block autoselect.
+    // Skip autoselect when the URL already points to a project open in the sidebar for this server.
     const validDir = initialDirectory && list.some((p) => p.worktree === initialDirectory)
     if (validDir) return
 
@@ -1302,7 +1302,8 @@ export default function Layout(props: ParentProps) {
       const [data] = globalSync.child(target.directory, { bootstrap: false })
       if (data.session.some((item) => item.id === target.id)) {
         setStore("lastProjectSession", root, { directory: target.directory, id: target.id, at: Date.now() })
-        navigateWithSidebarReset(`/${base64Encode(target.directory)}/session/${target.id}`)
+        clearSidebarHoverState()
+        navigate(`/${base64Encode(target.directory)}/session/${target.id}`)
         return true
       }
       const resolved = await globalSDK.client.session
@@ -1312,7 +1313,8 @@ export default function Layout(props: ParentProps) {
       if (!resolved?.directory) return false
       if (!canOpen(resolved.directory)) return false
       setStore("lastProjectSession", root, { directory: resolved.directory, id: resolved.id, at: Date.now() })
-      navigateWithSidebarReset(`/${base64Encode(resolved.directory)}/session/${resolved.id}`)
+      clearSidebarHoverState()
+      navigate(`/${base64Encode(resolved.directory)}/session/${resolved.id}`)
       return true
     }
 
@@ -1348,7 +1350,8 @@ export default function Layout(props: ParentProps) {
       return
     }
 
-    navigateWithSidebarReset(`/${base64Encode(root)}/session`)
+    clearSidebarHoverState()
+    navigate(`/${base64Encode(root)}/session`)
   }
 
   function navigateToSession(session: Session | undefined) {
