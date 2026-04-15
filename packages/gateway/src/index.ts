@@ -14,6 +14,8 @@ const args = parseArgs({
     config: { type: "string", short: "c" },
     port: { type: "string", short: "p" },
     host: { type: "string", short: "h" },
+    cert: { type: "string" },
+    key: { type: "string" },
   },
   strict: false,
 })
@@ -25,6 +27,9 @@ const cfg = args.values.config ?? path.join(
 )
 const port = Number(args.values.port) || 3000
 const hostname = args.values.host ?? "127.0.0.1"
+const tls = args.values.cert && args.values.key
+  ? { cert: Bun.file(args.values.cert), key: Bun.file(args.values.key) }
+  : undefined
 
 // --- assets ---
 
@@ -451,6 +456,7 @@ const app = new Hono()
 Bun.serve({
   port,
   hostname,
+  tls,
   idleTimeout: 0,
   fetch(req, server) {
     const url = new URL(req.url)
@@ -528,5 +534,6 @@ Bun.serve({
     },
   },
 })
-console.log(`opencode-gateway http://${hostname}:${port}`)
+const proto = tls ? "https" : "http"
+console.log(`opencode-gateway ${proto}://${hostname}:${port}`)
 console.log(`config: ${cfg}`)
