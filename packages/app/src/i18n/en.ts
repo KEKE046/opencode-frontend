@@ -824,6 +824,13 @@ export const dict = {
   "settings.general.notifications.permissions.description": "Show system notification when a permission is required",
   "settings.general.notifications.errors.title": "Errors",
   "settings.general.notifications.errors.description": "Show system notification when an error occurs",
+  "settings.general.notifications.browser.default.title": "Browser permission",
+  "settings.general.notifications.browser.default.description":
+    "Grant browser permission to receive notifications when the app is in the background.",
+  "settings.general.notifications.browser.denied.title": "Browser permission blocked",
+  "settings.general.notifications.browser.denied.description":
+    "Notifications are blocked. Enable them for this site in your browser settings.",
+  "settings.general.notifications.browser.grant": "Grant",
 
   "settings.general.sounds.agent.title": "Agent",
   "settings.general.sounds.agent.description": "Play sound when the agent is complete or needs attention",
