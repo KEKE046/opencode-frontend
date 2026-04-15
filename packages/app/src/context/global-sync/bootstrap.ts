@@ -88,7 +88,7 @@ export async function bootstrapGlobal(input: {
   formatMoreCount: (count: number) => string
   setGlobalStore: SetStoreFunction<GlobalStore>
 }) {
-  const fast = [
+  const all = [
     () =>
       retry(() =>
         input.globalSDK.global.config.get().then((x) => {
@@ -101,9 +101,6 @@ export async function bootstrapGlobal(input: {
           input.setGlobalStore("provider", normalizeProviderList(x.data!))
         }),
       ),
-  ]
-
-  const slow = [
     () =>
       retry(() =>
         input.globalSDK.path.get().then((x) => {
@@ -124,14 +121,7 @@ export async function bootstrapGlobal(input: {
   ]
 
   showErrors({
-    errors: errors(await runAll(fast)),
-    title: input.requestFailedTitle,
-    translate: input.translate,
-    formatMoreCount: input.formatMoreCount,
-  })
-  await waitForPaint()
-  showErrors({
-    errors: errors(await runAll(slow)),
+    errors: errors(await runAll(all)),
     title: input.requestFailedTitle,
     translate: input.translate,
     formatMoreCount: input.formatMoreCount,
@@ -222,13 +212,10 @@ export async function bootstrapDirectory(input: {
   input.setStore("lsp", [])
   if (loading) input.setStore("status", "partial")
 
-  const fast = [
+  const all = [
     () => retry(() => input.sdk.app.agents().then((x) => input.setStore("agent", normalizeAgentList(x.data)))),
     () => retry(() => input.sdk.config.get().then((x) => input.setStore("config", x.data!))),
     () => retry(() => input.sdk.session.status().then((x) => input.setStore("session_status", x.data!))),
-  ]
-
-  const slow = [
     () =>
       seededProject
         ? Promise.resolve()
@@ -314,7 +301,7 @@ export async function bootstrapDirectory(input: {
       ),
   ]
 
-  const errs = errors(await runAll(fast))
+  const errs = errors(await runAll(all))
   if (errs.length > 0) {
     console.error("Failed to bootstrap instance", errs[0])
     const project = getFilename(input.directory)
@@ -325,19 +312,7 @@ export async function bootstrapDirectory(input: {
     })
   }
 
-  await waitForPaint()
-  const slowErrs = errors(await runAll(slow))
-  if (slowErrs.length > 0) {
-    console.error("Failed to finish bootstrap instance", slowErrs[0])
-    const project = getFilename(input.directory)
-    showToast({
-      variant: "error",
-      title: input.translate("toast.project.reloadFailed.title", { project }),
-      description: formatServerError(slowErrs[0], input.translate),
-    })
-  }
-
-  if (loading && errs.length === 0 && slowErrs.length === 0) input.setStore("status", "complete")
+  if (loading && errs.length === 0) input.setStore("status", "complete")
 
   const rev = (providerRev.get(input.directory) ?? 0) + 1
   providerRev.set(input.directory, rev)
