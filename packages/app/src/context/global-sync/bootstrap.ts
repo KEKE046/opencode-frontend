@@ -88,7 +88,31 @@ export async function bootstrapGlobal(input: {
   formatMoreCount: (count: number) => string
   setGlobalStore: SetStoreFunction<GlobalStore>
 }) {
-  const all = [
+  // Critical: only project list is needed to unblock layout / autoselect
+  const critical = [
+    () =>
+      retry(() =>
+        input.globalSDK.project.list().then((x) => {
+          const projects = (x.data ?? [])
+            .filter((p) => !!p?.id)
+            .filter((p) => !!p.worktree && !p.worktree.includes("opencode-test"))
+            .slice()
+            .sort((a, b) => cmp(a.id, b.id))
+          input.setGlobalStore("project", projects)
+        }),
+      ),
+  ]
+
+  showErrors({
+    errors: errors(await runAll(critical)),
+    title: input.requestFailedTitle,
+    translate: input.translate,
+    formatMoreCount: input.formatMoreCount,
+  })
+  input.setGlobalStore("ready", true)
+
+  // Deferred: config, provider, path — loaded after ready so UI renders immediately
+  const deferred = [
     () =>
       retry(() =>
         input.globalSDK.global.config.get().then((x) => {
@@ -107,26 +131,8 @@ export async function bootstrapGlobal(input: {
           input.setGlobalStore("path", x.data!)
         }),
       ),
-    () =>
-      retry(() =>
-        input.globalSDK.project.list().then((x) => {
-          const projects = (x.data ?? [])
-            .filter((p) => !!p?.id)
-            .filter((p) => !!p.worktree && !p.worktree.includes("opencode-test"))
-            .slice()
-            .sort((a, b) => cmp(a.id, b.id))
-          input.setGlobalStore("project", projects)
-        }),
-      ),
   ]
-
-  showErrors({
-    errors: errors(await runAll(all)),
-    title: input.requestFailedTitle,
-    translate: input.translate,
-    formatMoreCount: input.formatMoreCount,
-  })
-  input.setGlobalStore("ready", true)
+  void runAll(deferred)
 }
 
 function groupBySession<T extends { id: string; sessionID: string }>(input: T[]) {
@@ -212,10 +218,27 @@ export async function bootstrapDirectory(input: {
   input.setStore("lsp", [])
   if (loading) input.setStore("status", "partial")
 
-  const all = [
+  // Critical: only session list + status needed for first render (sidebar + spinner)
+  const critical = [
+    () => retry(() => input.sdk.session.status().then((x) => input.setStore("session_status", x.data!))),
+    () => Promise.resolve(input.loadSessions(input.directory)),
+  ]
+
+  const errs = errors(await runAll(critical))
+  if (errs.length > 0) {
+    console.error("Failed to bootstrap instance", errs[0])
+    const project = getFilename(input.directory)
+    showToast({
+      variant: "error",
+      title: input.translate("toast.project.reloadFailed.title", { project }),
+      description: formatServerError(errs[0], input.translate),
+    })
+  }
+
+  // Deferred: everything else loads after first render
+  const deferred = [
     () => retry(() => input.sdk.app.agents().then((x) => input.setStore("agent", normalizeAgentList(x.data)))),
     () => retry(() => input.sdk.config.get().then((x) => input.setStore("config", x.data!))),
-    () => retry(() => input.sdk.session.status().then((x) => input.setStore("session_status", x.data!))),
     () =>
       seededProject
         ? Promise.resolve()
@@ -291,7 +314,6 @@ export async function bootstrapDirectory(input: {
           )
         }),
       ),
-    () => Promise.resolve(input.loadSessions(input.directory)),
     () =>
       retry(() =>
         input.sdk.mcp.status().then((x) => {
@@ -300,19 +322,13 @@ export async function bootstrapDirectory(input: {
         }),
       ),
   ]
-
-  const errs = errors(await runAll(all))
-  if (errs.length > 0) {
-    console.error("Failed to bootstrap instance", errs[0])
-    const project = getFilename(input.directory)
-    showToast({
-      variant: "error",
-      title: input.translate("toast.project.reloadFailed.title", { project }),
-      description: formatServerError(errs[0], input.translate),
-    })
-  }
-
-  if (loading && errs.length === 0) input.setStore("status", "complete")
+  void runAll(deferred).then((results) => {
+    const deferredErrs = errors(results)
+    if (deferredErrs.length > 0) {
+      console.error("Failed deferred bootstrap", deferredErrs[0])
+    }
+    if (loading && errs.length === 0 && deferredErrs.length === 0) input.setStore("status", "complete")
+  })
 
   const rev = (providerRev.get(input.directory) ?? 0) + 1
   providerRev.set(input.directory, rev)
