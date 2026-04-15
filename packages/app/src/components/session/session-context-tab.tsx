@@ -172,21 +172,20 @@ export function SessionContextTab() {
     return c.modelLabel
   })
 
-  const breakdown = createMemo(
-    on(
-      () => [ctx()?.message.id, ctx()?.input, messages().length, systemPrompt()],
-      () => {
-        const c = ctx()
-        if (!c?.input) return []
-        return estimateSessionContextBreakdown({
-          messages: messages(),
-          parts: sync.data.part as Record<string, Part[] | undefined>,
-          input: c.input,
-          systemPrompt: systemPrompt(),
-        })
-      },
-    ),
-  )
+  const breakdown = createMemo(() => {
+    const c = ctx()
+    if (!c?.input) return []
+    const msgs = messages()
+    // Read each message's parts so the memo re-runs when parts load
+    const parts: Record<string, Part[] | undefined> = {}
+    for (const m of msgs) parts[m.id] = sync.data.part[m.id]
+    return estimateSessionContextBreakdown({
+      messages: msgs,
+      parts,
+      input: c.input,
+      systemPrompt: systemPrompt(),
+    })
+  })
 
   const breakdownLabel = (key: SessionContextBreakdownKey) => {
     if (key === "system") return language.t("context.breakdown.system")
