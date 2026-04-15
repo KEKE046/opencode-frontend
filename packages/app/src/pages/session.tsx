@@ -1120,6 +1120,7 @@ export default function Page() {
 
   const focusInput = () => {
     if (isChildSession()) return
+    if (!isDesktop()) return
     inputRef?.focus()
   }
 

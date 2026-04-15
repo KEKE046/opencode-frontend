@@ -411,7 +411,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     applyHistoryComments(entry.comments)
     prompt.set(p, length)
     requestAnimationFrame(() => {
-      editorRef.focus()
+      if (window.innerWidth >= 768) editorRef.focus()
       setCursorPosition(editorRef, length)
       setStore("applyingHistory", false)
       queueScroll()
@@ -442,7 +442,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const setMode = (mode: "normal" | "shell") => {
     setStore("mode", mode)
     setStore("popover", null)
-    requestAnimationFrame(() => editorRef?.focus())
+    if (window.innerWidth >= 768) requestAnimationFrame(() => editorRef?.focus())
   }
 
   const shellModeKey = "mod+shift+x"
@@ -494,7 +494,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
 
   const focusEditorEnd = () => {
     requestAnimationFrame(() => {
-      editorRef.focus()
+      if (window.innerWidth >= 768) editorRef.focus()
       const range = document.createRange()
       const selection = window.getSelection()
       range.selectNodeContents(editorRef)
@@ -513,7 +513,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const restoreFocus = () => {
     requestAnimationFrame(() => {
       const cursor = prompt.cursor() ?? promptLength(prompt.current())
-      editorRef.focus()
+      if (window.innerWidth >= 768) editorRef.focus()
       setCursorPosition(editorRef, cursor)
       queueScroll()
     })
@@ -1035,7 +1035,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
         setStore("savedPrompt", null)
         prompt.set(edit.prompt, promptLength(edit.prompt))
         requestAnimationFrame(() => {
-          editorRef.focus()
+          if (window.innerWidth >= 768) editorRef.focus()
           setCursorPosition(editorRef, promptLength(edit.prompt))
           queueScroll()
         })
@@ -1066,7 +1066,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     isDialogActive: () => !!dialog.active,
     setDraggingType: (type) => setStore("draggingType", type),
     focusEditor: () => {
-      editorRef.focus()
+      if (window.innerWidth >= 768) editorRef.focus()
       setCursorPosition(editorRef, promptLength(prompt.current()))
     },
     addPart,
