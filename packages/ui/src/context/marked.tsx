@@ -4,7 +4,10 @@ import markedShiki from "marked-shiki"
 import katex from "katex"
 import { bundledLanguages, type BundledLanguage } from "shiki"
 import { createSimpleContext } from "./helper"
-import { getSharedHighlighter, registerCustomTheme, ThemeRegistrationResolved } from "@pierre/diffs"
+import { extendFileFormatMap, getSharedHighlighter, registerCustomTheme, ThemeRegistrationResolved } from "@pierre/diffs"
+
+// Map CUDA file extensions to C++ syntax highlighting
+extendFileFormatMap({ cu: "cpp", cuh: "cpp" })
 
 registerCustomTheme("OpenCode", () => {
   return Promise.resolve({
