@@ -1,7 +1,6 @@
 import { createEffect, For, onCleanup, Show, type JSX } from "solid-js"
 import { createStore, reconcile } from "solid-js/store"
 import { Tooltip } from "@opencode-ai/ui/tooltip"
-import { useNavigate } from "@solidjs/router"
 import { ServerHealthIndicator } from "@/components/server/server-row"
 import { ServerConnection, serverName, useServer } from "@/context/server"
 import { getAvatarColors } from "@/context/layout"
@@ -24,7 +23,6 @@ function initials(name: string) {
 
 export const ServerRail = (props: { mobile?: boolean }): JSX.Element => {
   const server = useServer()
-  const navigate = useNavigate()
   const check = useCheckServerHealth()
   const [health, setHealth] = createStore({} as Record<ServerConnection.Key, ServerHealth | undefined>)
   const placement = () => (props.mobile ? "bottom" : "right")
@@ -66,8 +64,7 @@ export const ServerRail = (props: { mobile?: boolean }): JSX.Element => {
                 "border border-transparent hover:bg-surface-base-hover hover:border-border-weak-base": !active(),
               }}
               onClick={() => {
-                navigate("/")
-                queueMicrotask(() => server.setActive(key))
+                server.setActive(key)
               }}
             >
               <div
