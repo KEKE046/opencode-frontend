@@ -2263,7 +2263,9 @@ export default function Layout(props: ParentProps) {
                       onDragOver={handleWorkspaceDragOver}
                       collisionDetector={closestCenter}
                     >
-                      <DragDropSensors />
+                      <Show when={!panelProps.mobile}>
+                        <DragDropSensors />
+                      </Show>
                       <ConstrainDragXAxis />
                       <div
                         ref={(el) => {

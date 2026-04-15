@@ -1909,8 +1909,8 @@ export default function Page() {
                 }}
                 onClick={() => setStore("mobileTab", "changes")}
               >
-                {hasReview()
-                  ? language.t("session.review.filesChanged", { count: reviewCount() })
+                {reviewCount() > 0
+                  ? `${language.t("session.review.change.other")} ${reviewCount()}`
                   : language.t("session.review.change.other")}
               </button>
             </div>
