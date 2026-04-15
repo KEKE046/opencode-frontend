@@ -186,8 +186,8 @@ const proxyCache = new Map<string, CacheEntry>()
 
 // Exact-path TTL cache entries (no query string)
 const CACHED_PATHS = new Map<string, number>([
-  ["/provider", 30_000],
-  ["/global/config", 30_000],
+  ["/provider", 60_000],
+  ["/global/config", 60_000],
   ["/command", 60_000],
 ])
 
@@ -364,6 +364,8 @@ const app = new Hono()
       if (hopByHop.has(name.toLowerCase())) continue
       headers.set(name, value)
     }
+    // Ensure gateway→server always requests gzip even if client didn't
+    if (!isSse && !headers.has("accept-encoding")) headers.set("Accept-Encoding", "gzip")
     const auth = authHeader(server)
     if (auth.Authorization) headers.set("Authorization", auth.Authorization)
     
@@ -537,3 +539,36 @@ Bun.serve({
 const proto = tls ? "https" : "http"
 console.log(`opencode-gateway ${proto}://${hostname}:${port}`)
 console.log(`config: ${cfg}`)
+
+// --- cache warming ---
+// Periodically fetch /provider and /global/config for every registered server
+// so the first client request hits a warm cache instead of waiting for the backend.
+
+const WARM_PATHS = ["/provider", "/global/config"]
+const WARM_INTERVAL_MS = 60_000
+
+async function warm() {
+  const data = await load()
+  const servers = data.servers ?? {}
+  for (const [key, server] of Object.entries(servers)) {
+    for (const p of WARM_PATHS) {
+      const ckey = proxyKey(key, p)
+      const cached = proxyCache.get(ckey)
+      if (cached && Date.now() - cached.at < cached.ttl) continue
+      try {
+        const headers: Record<string, string> = { "Accept-Encoding": "gzip", ...authHeader(server) }
+        const res = await fetch(server.url + p, { headers, signal: AbortSignal.timeout(10_000) })
+        if (!res.ok) continue
+        const body = await res.text()
+        const etag = `"${createHash("md5").update(body).digest("hex")}"`
+        const ct = res.headers.get("content-type") ?? "application/json"
+        const ttl = CACHED_PATHS.get(p) ?? 60_000
+        proxyCache.set(ckey, { body, etag, at: Date.now(), ct, ttl })
+      } catch {}
+    }
+  }
+}
+
+// initial warm + periodic refresh
+void warm()
+setInterval(() => void warm(), WARM_INTERVAL_MS)
