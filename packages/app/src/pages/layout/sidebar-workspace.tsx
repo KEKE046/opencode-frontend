@@ -83,6 +83,7 @@ export const WorkspaceDragOverlay = (props: {
 const WorkspaceHeader = (props: {
   local: Accessor<boolean>
   busy: Accessor<boolean>
+  running: Accessor<boolean>
   open: Accessor<boolean>
   directory: string
   language: ReturnType<typeof useLanguage>
@@ -95,9 +96,12 @@ const WorkspaceHeader = (props: {
   projectId?: string
 }): JSX.Element => (
   <div class="flex items-center gap-1 min-w-0 flex-1">
-    <div class="flex items-center justify-center shrink-0 size-6">
+    <div class="relative flex items-center justify-center shrink-0 size-6">
       <Show when={props.busy()} fallback={<Icon name="branch" size="small" />}>
         <Spinner class="size-[15px]" />
+      </Show>
+      <Show when={props.running() && !props.busy()}>
+        <div class="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-icon-success-base ring-1 ring-background-base animate-pulse" />
       </Show>
     </div>
     <span class="text-14-medium text-text-base shrink-0">
@@ -329,11 +333,15 @@ export const SortableWorkspace = (props: {
     await globalSync.project.loadSessions(props.directory)
   }
 
+  const running = createMemo(() =>
+    Object.values(workspaceStore.session_status).some((s) => s !== undefined && s.type !== "idle"),
+  )
   const workspaceEditActive = createMemo(() => props.ctx.editorOpen(`workspace:${props.directory}`))
   const header = () => (
     <WorkspaceHeader
       local={local}
       busy={busy}
+      running={running}
       open={open}
       directory={props.directory}
       language={language}
