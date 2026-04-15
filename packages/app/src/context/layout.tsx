@@ -697,6 +697,7 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
         },
         hide() {
           setStore("mobileSidebar", "opened", false)
+          ;(document.activeElement as HTMLElement | null)?.blur()
         },
         toggle() {
           setStore("mobileSidebar", "opened", (x) => !x)
