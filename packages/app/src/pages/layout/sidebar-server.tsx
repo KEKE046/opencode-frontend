@@ -73,7 +73,7 @@ export const ServerRail = (props: { mobile?: boolean }): JSX.Element => {
               >
                 {abbr}
               </div>
-              <Show when={!props.mobile || health[key]?.healthy === false}>
+              <Show when={health[key]?.healthy === false}>
                 <div class="absolute top-px right-px">
                   <ServerHealthIndicator health={health[key]} />
                 </div>
