@@ -186,8 +186,8 @@ const proxyCache = new Map<string, CacheEntry>()
 
 // Exact-path TTL cache entries (no query string)
 const CACHED_PATHS = new Map<string, number>([
-  ["/provider", 60_000],
-  ["/global/config", 60_000],
+  ["/provider", 30_000],
+  ["/global/config", 30_000],
   ["/command", 60_000],
 ])
 
@@ -325,66 +325,6 @@ const app = new Hono()
       return c.json({ key, name: data.servers![key].name, healthy: true })
     })
   })
-  .post("/s/:key/_batch", async (c) => {
-    const key = c.req.param("key")
-    const data = await load()
-    const server = data.servers?.[key]
-    if (!server) return c.json({ error: "server not found" }, 404)
-
-    type BatchReq = { method: string; path: string; headers?: Record<string, string> }
-    const items = await c.req.json<BatchReq[]>()
-    if (!Array.isArray(items)) return c.json({ error: "expected array" }, 400)
-
-    const auth = authHeader(server)
-    const results = await Promise.all(
-      items.map(async (item) => {
-        // Check TTL cache first
-        const ttl = item.method === "GET" ? (CACHED_PATHS.get(item.path) ?? 0) : 0
-        if (ttl > 0) {
-          const ckey = proxyKey(key, item.path)
-          const cached = proxyCache.get(ckey)
-          if (cached && Date.now() - cached.at < cached.ttl) {
-            return { status: 200, headers: { "content-type": cached.ct, ...(cached.cursor ? { "x-next-cursor": cached.cursor } : {}) }, body: cached.body }
-          }
-        }
-
-        const url = server.url + item.path
-        const headers: Record<string, string> = { "Accept-Encoding": "gzip", ...auth, ...(item.headers ?? {}) }
-        try {
-          const res = await fetch(url, { method: item.method ?? "GET", headers, signal: AbortSignal.timeout(15_000) })
-          const body = await res.text()
-
-          // Populate cache
-          if (ttl > 0 && res.ok) {
-            const etag = `"${createHash("md5").update(body).digest("hex")}"`
-            const ct = res.headers.get("content-type") ?? "application/json"
-            const cursor = res.headers.get("x-next-cursor") ?? undefined
-            proxyCache.set(proxyKey(key, item.path), { body, etag, at: Date.now(), ct, ttl, cursor })
-          }
-
-          const rh: Record<string, string> = {}
-          for (const [n, v] of res.headers.entries()) {
-            if (["content-type", "x-next-cursor"].includes(n.toLowerCase())) rh[n.toLowerCase()] = v
-          }
-
-          // Strip session info for single-session GETs
-          if (item.method === "GET" && SESSION_SINGLE_RE.test(item.path) && res.ok && body) {
-            try { return { status: res.status, headers: rh, body: JSON.stringify(stripSessionInfo(JSON.parse(body))) } }
-            catch { /* fall through */ }
-          }
-
-          // Return raw body string — client uses it directly as Response body
-          return { status: res.status, headers: rh, body }
-        } catch {
-          return { status: 502, headers: { "content-type": "application/json" }, body: '{"error":"proxy failed"}' }
-        }
-      }),
-    )
-
-    // body is always a string — c.json() will escape it properly.
-    // Client uses r.body directly as the Response body text.
-    return c.json(results)
-  })
   .all("/s/:key/*", async (c) => {
     const key = c.req.param("key")
     const data = await load()
@@ -424,8 +364,6 @@ const app = new Hono()
       if (hopByHop.has(name.toLowerCase())) continue
       headers.set(name, value)
     }
-    // Ensure gateway→server always requests gzip even if client didn't
-    if (!isSse && !headers.has("accept-encoding")) headers.set("Accept-Encoding", "gzip")
     const auth = authHeader(server)
     if (auth.Authorization) headers.set("Authorization", auth.Authorization)
     
@@ -599,36 +537,3 @@ Bun.serve({
 const proto = tls ? "https" : "http"
 console.log(`opencode-gateway ${proto}://${hostname}:${port}`)
 console.log(`config: ${cfg}`)
-
-// --- cache warming ---
-// Periodically fetch /provider and /global/config for every registered server
-// so the first client request hits a warm cache instead of waiting for the backend.
-
-const WARM_PATHS = ["/provider", "/global/config"]
-const WARM_INTERVAL_MS = 60_000
-
-async function warm() {
-  const data = await load()
-  const servers = data.servers ?? {}
-  for (const [key, server] of Object.entries(servers)) {
-    for (const p of WARM_PATHS) {
-      const ckey = proxyKey(key, p)
-      const cached = proxyCache.get(ckey)
-      if (cached && Date.now() - cached.at < cached.ttl) continue
-      try {
-        const headers: Record<string, string> = { "Accept-Encoding": "gzip", ...authHeader(server) }
-        const res = await fetch(server.url + p, { headers, signal: AbortSignal.timeout(10_000) })
-        if (!res.ok) continue
-        const body = await res.text()
-        const etag = `"${createHash("md5").update(body).digest("hex")}"`
-        const ct = res.headers.get("content-type") ?? "application/json"
-        const ttl = CACHED_PATHS.get(p) ?? 60_000
-        proxyCache.set(ckey, { body, etag, at: Date.now(), ct, ttl })
-      } catch {}
-    }
-  }
-}
-
-// initial warm + periodic refresh
-void warm()
-setInterval(() => void warm(), WARM_INTERVAL_MS)
