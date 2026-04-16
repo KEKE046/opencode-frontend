@@ -116,8 +116,28 @@ export function estimateSessionContextBreakdown(args: {
   }
   const estimated = tokens.system + tokens.user + tokens.assistant + tokens.tool
 
+  if (estimated === 0) return []
+
+  // When the estimate covers less than half of input tokens, the gap is likely from
+  // unloaded messages (initial page size < total messages). Scale proportionally
+  // instead of dumping the remainder into "other".
+  const remainder = args.input - estimated
+  if (remainder > args.input * 0.5) {
+    const scale = args.input / estimated
+    return build(
+      {
+        system: Math.round(tokens.system * scale),
+        user: Math.round(tokens.user * scale),
+        assistant: Math.round(tokens.assistant * scale),
+        tool: Math.round(tokens.tool * scale),
+        other: 0,
+      },
+      args.input,
+    )
+  }
+
   if (estimated <= args.input) {
-    return build({ ...tokens, other: args.input - estimated }, args.input)
+    return build({ ...tokens, other: remainder }, args.input)
   }
 
   const scale = args.input / estimated
