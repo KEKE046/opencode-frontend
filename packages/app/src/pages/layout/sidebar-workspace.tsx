@@ -355,7 +355,9 @@ export const SortableWorkspace = (props: {
 
   createEffect(() => {
     if (!boot()) return
-    globalSync.child(props.directory, { bootstrap: true })
+    // Only full-bootstrap the active workspace; others just create the child
+    // store without triggering 11+ API requests per directory.
+    globalSync.child(props.directory, { bootstrap: active() })
   })
 
   return (
