@@ -322,7 +322,11 @@ function createGlobalSync() {
       })
       if (event.type === "server.connected" || event.type === "global.disposed") {
         if (recent) return
-        for (const directory of Object.keys(children.children)) {
+        for (const [directory, [store]] of Object.entries(children.children)) {
+          // Only re-bootstrap directories that were previously bootstrapped;
+          // skip child stores that were created with bootstrap: false (e.g.
+          // non-active workspaces) to avoid N*11 request storms.
+          if (store.status === "loading") continue
           queue.push(directory)
         }
       }
