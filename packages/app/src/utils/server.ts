@@ -34,7 +34,7 @@ function createBatchFetch(base: string) {
       const results = (await res.json()) as Array<{
         status: number
         headers: Record<string, string>
-        body: unknown
+        body: string
       }>
       for (let i = 0; i < batch.length; i++) {
         const r = results[i]
@@ -44,8 +44,8 @@ function createBatchFetch(base: string) {
         }
         const h = new Headers(r.headers ?? {})
         if (!h.has("content-type")) h.set("content-type", "application/json")
-        const body = r.body == null ? "null" : typeof r.body === "string" ? r.body : JSON.stringify(r.body)
-        batch[i].resolve(new Response(body, { status: r.status, statusText: "OK", headers: h }))
+        // body is the raw response text from the backend — use directly
+        batch[i].resolve(new Response(r.body ?? "", { status: r.status, statusText: "OK", headers: h }))
       }
     } catch {
       // Any parse/construction error — fall back to individual fetches
