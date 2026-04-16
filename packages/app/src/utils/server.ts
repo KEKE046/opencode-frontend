@@ -111,6 +111,10 @@ function createBatchFetch(base: string) {
   }
 }
 
+// Shared batcher per gateway key — all SDK clients for the same server
+// share one queue so their requests merge into a single POST /_batch.
+const batchers = new Map<string, (input: Request) => Promise<Response>>()
+
 export function createSdkForServer({
   server,
   gatewayKey,
@@ -131,7 +135,11 @@ export function createSdkForServer({
 
   const baseUrl = inGatewayMode ? `${location.origin}/s/${gatewayKey}` : server.url
 
-  const batchedFetch = inGatewayMode ? createBatchFetch(baseUrl) : undefined
+  let batchedFetch: ((input: Request) => Promise<Response>) | undefined
+  if (inGatewayMode) {
+    if (!batchers.has(gatewayKey)) batchers.set(gatewayKey, createBatchFetch(baseUrl))
+    batchedFetch = batchers.get(gatewayKey)
+  }
 
   return createOpencodeClient({
     ...config,
