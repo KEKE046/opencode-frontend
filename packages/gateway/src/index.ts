@@ -344,7 +344,7 @@ const app = new Hono()
           const ckey = proxyKey(key, item.path)
           const cached = proxyCache.get(ckey)
           if (cached && Date.now() - cached.at < cached.ttl) {
-            return { status: 200, headers: { "content-type": cached.ct, ...(cached.cursor ? { "x-next-cursor": cached.cursor } : {}) }, body: JSON.parse(cached.body) }
+            return { status: 200, headers: { "content-type": cached.ct, ...(cached.cursor ? { "x-next-cursor": cached.cursor } : {}) }, body: cached.body }
           }
         }
 
@@ -368,19 +368,32 @@ const app = new Hono()
           }
 
           // Strip session info for single-session GETs
-          if (item.method === "GET" && SESSION_SINGLE_RE.test(item.path) && res.ok) {
-            return { status: res.status, headers: rh, body: stripSessionInfo(JSON.parse(body)) }
+          if (item.method === "GET" && SESSION_SINGLE_RE.test(item.path) && res.ok && body) {
+            try { return { status: res.status, headers: rh, body: JSON.stringify(stripSessionInfo(JSON.parse(body))) } }
+            catch { /* fall through */ }
           }
 
-          try { return { status: res.status, headers: rh, body: JSON.parse(body) } }
-          catch { return { status: res.status, headers: rh, body } }
+          // Return raw body string — client uses it directly as Response body
+          return { status: res.status, headers: rh, body }
         } catch {
-          return { status: 502, headers: {}, body: { error: "proxy failed" } }
+          return { status: 502, headers: { "content-type": "application/json" }, body: '{"error":"proxy failed"}' }
         }
       }),
     )
 
-    return c.json(results)
+    // Embed each result's body as raw JSON to avoid double-serialization.
+    // If the body isn't valid JSON (empty, plain text), wrap it as a JSON string.
+    const parts = results.map((r) => {
+      const h = JSON.stringify(r.headers)
+      let b = "null"
+      if (r.body) {
+        try { JSON.parse(r.body); b = r.body }
+        catch { b = JSON.stringify(r.body) }
+      }
+      return `{"status":${r.status},"headers":${h},"body":${b}}`
+    })
+    c.header("Content-Type", "application/json")
+    return c.body(`[${parts.join(",")}]`)
   })
   .all("/s/:key/*", async (c) => {
     const key = c.req.param("key")

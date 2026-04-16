@@ -43,7 +43,8 @@ function createBatchFetch(base: string) {
           continue
         }
         const h = new Headers(r.headers ?? {})
-        const body = typeof r.body === "string" ? r.body : JSON.stringify(r.body)
+        // body is already a parsed JSON value (gateway embeds raw JSON in the array)
+        const body = r.body == null ? "null" : typeof r.body === "string" ? r.body : JSON.stringify(r.body)
         batch[i].resolve(new Response(body, { status: r.status, headers: h }))
       }
     } catch (err) {
