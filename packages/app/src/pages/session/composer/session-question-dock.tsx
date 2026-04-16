@@ -159,7 +159,7 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
     focusFrame = requestAnimationFrame(() => {
       focusFrame = undefined
       const el = next === options().length ? customRef : optsRef[next]
-      el?.focus()
+      if (window.innerWidth >= 768) el?.focus()
     })
   }
 
@@ -378,7 +378,7 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
 
   const focusCustom = (el: HTMLTextAreaElement) => {
     setTimeout(() => {
-      el.focus()
+      if (window.innerWidth >= 768) el.focus()
       resizeInput(el)
     }, 0)
   }
