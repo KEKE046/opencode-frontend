@@ -52,9 +52,11 @@ function createBatchFetch(base: string) {
     }
   }
 
+  const basePath = new URL(base).pathname
+
   return (input: Request): Promise<Response> => {
     const url = new URL(input.url)
-    const path = url.pathname.replace(base, "") + url.search
+    const path = url.pathname.replace(basePath, "") + url.search
 
     // Only batch GET/HEAD; pass through mutations, SSE, and WebSocket
     if (input.method !== "GET" && input.method !== "HEAD") {
