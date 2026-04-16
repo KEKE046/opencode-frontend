@@ -662,13 +662,9 @@ export default function Layout(props: ParentProps) {
     const dirs = visibleSessionDirs()
     if (dirs.length === 0) return [] as Session[]
 
-    const active = currentDir()
     const result: Session[] = []
     for (const dir of dirs) {
-      // Only bootstrap the active workspace eagerly; others load on demand
-      // (e.g. when SortableWorkspace renders with boot=true).
-      const boot = workspaceKey(dir) === workspaceKey(active)
-      const [dirStore] = globalSync.child(dir, { bootstrap: boot })
+      const [dirStore] = globalSync.child(dir, { bootstrap: true })
       const dirSessions = sortedRootSessions(dirStore, now)
       result.push(...dirSessions)
     }
