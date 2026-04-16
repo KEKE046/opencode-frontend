@@ -27,14 +27,14 @@ function createBatchFetch(base: string) {
         body: JSON.stringify(items),
       })
       if (!res.ok) {
-        const err = new Error(`batch failed: ${res.status}`)
-        for (const p of batch) p.reject(err)
+        // Batch request itself failed — fall back to individual fetches
+        await fallback(batch)
         return
       }
       const results = (await res.json()) as Array<{
         status: number
         headers: Record<string, string>
-        body: unknown
+        body: string
       }>
       for (let i = 0; i < batch.length; i++) {
         const r = results[i]
@@ -43,13 +43,27 @@ function createBatchFetch(base: string) {
           continue
         }
         const h = new Headers(r.headers ?? {})
-        // body is already a parsed JSON value (gateway embeds raw JSON in the array)
-        const body = r.body == null ? "null" : typeof r.body === "string" ? r.body : JSON.stringify(r.body)
-        batch[i].resolve(new Response(body, { status: r.status, headers: h }))
+        if (!h.has("content-type")) h.set("content-type", "application/json")
+        // body is the raw response text from the backend — use directly
+        batch[i].resolve(new Response(r.body ?? "", { status: r.status, statusText: "OK", headers: h }))
       }
-    } catch (err) {
-      for (const p of batch) p.reject(err)
+    } catch {
+      // Any parse/construction error — fall back to individual fetches
+      await fallback(batch)
     }
+  }
+
+  async function fallback(batch: Pending[]) {
+    await Promise.allSettled(
+      batch.map(async (p) => {
+        try {
+          const res = await fetch(`${base}${p.path}`)
+          p.resolve(res)
+        } catch (err) {
+          p.reject(err)
+        }
+      }),
+    )
   }
 
   const basePath = new URL(base).pathname

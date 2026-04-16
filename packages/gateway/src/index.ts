@@ -381,19 +381,9 @@ const app = new Hono()
       }),
     )
 
-    // Embed each result's body as raw JSON to avoid double-serialization.
-    // If the body isn't valid JSON (empty, plain text), wrap it as a JSON string.
-    const parts = results.map((r) => {
-      const h = JSON.stringify(r.headers)
-      let b = "null"
-      if (r.body) {
-        try { JSON.parse(r.body); b = r.body }
-        catch { b = JSON.stringify(r.body) }
-      }
-      return `{"status":${r.status},"headers":${h},"body":${b}}`
-    })
-    c.header("Content-Type", "application/json")
-    return c.body(`[${parts.join(",")}]`)
+    // body is always a string — c.json() will escape it properly.
+    // Client uses r.body directly as the Response body text.
+    return c.json(results)
   })
   .all("/s/:key/*", async (c) => {
     const key = c.req.param("key")
