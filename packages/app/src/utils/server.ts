@@ -68,11 +68,12 @@ function createBatchFetch(base: string) {
 
       if (!queue) {
         queue = []
-        queueMicrotask(() => {
+        // Collect requests over a 10ms window so async bootstrap phases
+        // across multiple workspaces merge into a single batch.
+        setTimeout(() => {
           const batch = queue!
           queue = null
           if (batch.length === 1) {
-            // Single request — no batch overhead
             const req = new Request(`${base}${batch[0].path}`, { headers: input.headers })
             ;(req as any).timeout = false
             fetch(req).then(batch[0].resolve, batch[0].reject)
@@ -81,7 +82,7 @@ function createBatchFetch(base: string) {
           flush(batch).catch((err) => {
             for (const p of batch) p.reject(err)
           })
-        })
+        }, 10)
       }
       queue.push({ path, headers, resolve, reject })
     })
